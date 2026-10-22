@@ -2,7 +2,7 @@
 
 **Type:** Enhancement / Refactor  
 **Priority:** High  
-**Area:** `src/ui.ts`, `src/index.ts`  
+**Area:** `src/ui.ts`, `src/index.ts`, `src/openai.ts`  
 **Status:** Open
 
 ---
@@ -10,6 +10,8 @@
 ## Summary
 
 Agentic-cli's current UI is built entirely with `chalk` (static `console.log` calls) and `readline` (raw node interface). This produces a static, non-interactive terminal experience with no real-time feedback, no cursor navigation, and no live updates. The goal is to migrate to **[Ink](https://github.com/vadimdemedes/ink)** — the React-for-CLI framework that powers Claude Code, GitHub Copilot CLI, and similar tools — to deliver an interactive, component-driven TUI that matches the quality of modern developer tools.
+
+> **Note:** The codebase has already been migrated from the Gemini SDK to the OpenAI-compatible API (`src/openai.ts`, default model `gpt-4.1-mini`). This TUI migration builds on top of that updated client.
 
 > **Why Ink over Bubble Tea?**  
 > Bubble Tea is a Go TUI framework. Agentic-cli is TypeScript/Node.js. Ink is the idiomatic equivalent for the Node ecosystem: same reactive model, same component tree, runs natively in the existing build pipeline (`tsx`, `tsup`).
@@ -69,7 +71,7 @@ Agentic-cli's current UI is built entirely with `chalk` (static `console.log` ca
 
 ```
 ╭─────────────────────────────────────────────────────────╮
-│  Agentic-cli  v4.3  ·  Gemini 2.5 Flash  ·  10 msgs  ·  YOLO  │
+│  Agentic-cli  v4.2  ·  gpt-4.1-mini  ·  10 msgs  ·  YOLO  │
 ╰─────────────────────────────────────────────────────────╯
 
   🤖  The recursive Fibonacci approach has O(2ⁿ) time…
@@ -153,7 +155,7 @@ src/tui/
 │   ├── SetupWizard.tsx     ← replaces current intro/password/select flow
 │   └── HelpPanel.tsx       ← replaces printHelp()
 └── hooks/
-    ├── useStream.ts        ← subscribes to Gemini token stream, updates state
+    ├── useStream.ts        ← subscribes to OpenAI-compatible token stream (via EventEmitter), updates state
     ├── useHistory.ts       ← input history (↑↓ navigation)
     └── useConfirm.ts       ← promise-based keyboard y/n resolver
 ```
@@ -174,7 +176,7 @@ Rendered with `ink`'s `Box` at fixed position. Shows:
 - Session uptime
 
 #### `StreamingMessage.tsx`
-Uses a custom `useStream` hook that listens on an `EventEmitter` the agent emits tokens to. Renders partial text into a `Text` component that Ink reconciles in-place — this eliminates the current line-jumping behavior.
+Uses a custom `useStream` hook that listens on an `EventEmitter` the agent emits tokens to. Tokens come from the OpenAI-compatible streaming API (`streamMessage` in `src/openai.ts` via `openai` SDK). Renders partial text into a `Text` component that Ink reconciles in-place — this eliminates the current line-jumping behavior.
 
 #### `ToolCall.tsx`
 Renders a styled box (similar to current `printToolHeader`) but as a React component. When awaiting confirmation, renders `ToolConfirmDialog` inline with `[y/N]` driven by `useInput` from Ink — no readline required.
@@ -190,10 +192,10 @@ Passes submitted value to the parent `App` via `onSubmit` callback.
 
 ### Phase 4 — Agent Integration
 
-The agent (`src/agent.ts`) currently calls `ui.ts` functions directly. After migration:
+The agent (`src/agent.ts`) currently calls `ui.ts` functions directly and uses the OpenAI-compatible streaming API via `src/openai.ts`. After migration:
 
 1. The `ConfirmFn` will resolve via `useConfirm` hook (keyboard input captured by Ink's `useInput`) instead of `readline.question`
-2. Streaming tokens will be emitted via `EventEmitter` that `StreamingMessage` subscribes to
+2. Streaming tokens will be emitted via `EventEmitter` that `StreamingMessage` subscribes to — the underlying stream already comes from `streamMessage()` in `src/openai.ts`
 3. Tool headers/results will be emitted as structured events, rendered by `ToolCall` component
 4. `runAgentTurn` will return structured `AgentEvent` objects; the Ink `App` renders them
 
@@ -217,6 +219,7 @@ The agent (`src/agent.ts`) currently calls `ui.ts` functions directly. After mig
 | `src/ui.ts` | Delete (replaced by `src/tui/`) |
 | `src/index.ts` | Replace `readline` REPL + `printBanner()` with `render(<App />)` |
 | `src/agent.ts` | Emit `AgentEvent` objects instead of calling `ui.*` functions directly |
+| `src/openai.ts` | Wire streaming tokens to `EventEmitter` consumed by `StreamingMessage` |
 | `tsconfig.json` | Add `"jsx": "react"`, `"jsxImportSource": "react"` |
 | `package.json` | Add Ink + component packages; remove `ora`, `@clack/prompts` |
 
