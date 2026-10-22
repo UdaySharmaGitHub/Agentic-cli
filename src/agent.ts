@@ -1,25 +1,20 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  Agent — ReAct loop powered by Google Gemini function calling
+//  Agent — ReAct loop powered by OpenAI-compatible function calling
 //
 //  How it works:
 //    1. User sends a message
-//    2. Gemini responds with text AND/OR functionCall parts
-//    3. If functionCall → execute each tool, send results back as functionResponse
-//    4. Gemini sees results and either calls more tools or gives final answer
-//    5. Loop continues until Gemini stops calling functions
-//
-//  Key difference from the bash/Gemini version (setup.sh):
-//    - Uses native function calling API instead of manual JSON parsing
-//    - No manual "done" flag needed — Gemini's function calling flow handles it
-//    - Streaming support for real-time text output
+//    2. LLM responds with text AND/OR tool_calls
+//    3. If tool_calls → execute each tool, send results back as role:'tool' messages
+//    4. LLM sees results and either calls more tools or gives final answer
+//    5. Loop continues until LLM stops calling functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 import chalk from 'chalk';
 import ora from 'ora';
-import { streamMessage } from './gemini.js';
+import { streamMessage } from './openai.js';
 import { executeTool, type ConfirmFn } from './tools/index.js';
-import type { MessageParam, Part } from './memory.js';
+import type { ChatMessage } from './memory.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,8 +28,8 @@ export interface AgentOptions {
 // ── Agentic Loop ─────────────────────────────────────────────────────────────
 
 export async function runAgentTurn(
-  client: GoogleGenerativeAI,
-  messages: MessageParam[],
+  client: OpenAI,
+  messages: ChatMessage[],
   systemPrompt: string,
   options: AgentOptions,
 ): Promise<void> {
@@ -48,7 +43,7 @@ export async function runAgentTurn(
       console.log(chalk.cyan.bold(`  ┌─ Step ${steps} / ${options.maxSteps} ──────────────────────────────────┐`));
     }
 
-    // ── Call Gemini with streaming ───────────────────────────────────────────
+    // ── Call LLM with streaming ──────────────────────────────────────────────
     const spinner = ora({ text: '  Thinking...', indent: 2 }).start();
 
     let response;
@@ -78,46 +73,45 @@ export async function runAgentTurn(
       return;
     }
 
-    // ── Debug: show raw response ──────────────────────────────────────────
+    // ── Debug: show raw response ─────────────────────────────────────────────
     if (options.showRaw) {
       console.log(chalk.dim('  ── Raw response ──────────────────────────'));
-      console.log(JSON.stringify(response.parts, null, 2));
-      console.log(chalk.dim(`  functionCalls: ${response.functionCalls.length}`));
+      console.log(JSON.stringify(response.toolCalls, null, 2));
+      console.log(chalk.dim(`  toolCalls: ${response.toolCalls.length}`));
       console.log(chalk.dim('  ──────────────────────────────────────────'));
     }
 
-    // ── Add model message to history ──────────────────────────────────────
-    messages.push({ role: 'model', parts: response.parts });
+    // ── Add assistant message to history ────────────────────────────────────
+    if (response.toolCalls.length > 0) {
+      messages.push({
+        role: 'assistant',
+        content: response.text || null,
+        tool_calls: response.toolCalls,
+      });
+    } else {
+      messages.push({ role: 'assistant', content: response.text });
+    }
 
-    // ── If no function calls, the task is complete ──────────────────────────
-    if (response.functionCalls.length === 0) {
+    // ── If no tool calls, the task is complete ───────────────────────────────
+    if (response.toolCalls.length === 0) {
       console.log(chalk.green(`  ✔ Task complete after ${steps} step(s).`));
       return;
     }
 
-    // ── Execute function calls ────────────────────────────────────────────
-    const functionResponses: Part[] = [];
+    // ── Execute tool calls ───────────────────────────────────────────────────
+    for (const call of response.toolCalls) {
+      const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
+      const result = await executeTool(call.function.name, args, options.confirm);
 
-    for (const call of response.functionCalls) {
-      const result = await executeTool(
-        call.name,
-        call.args,
-        options.confirm,
-      );
-
-      functionResponses.push({
-        functionResponse: {
-          name: call.name,
-          response: { result: result.output, error: result.isError },
-        },
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: result.output,
       });
     }
 
-    // ── Feed function results back to Gemini ──────────────────────────────
-    messages.push({ role: 'user', parts: functionResponses });
-
     console.log();
-    console.log(chalk.dim(`  ↻ Step ${steps} done — feeding results to Gemini for next step...`));
+    console.log(chalk.dim(`  ↻ Step ${steps} done — feeding results to LLM for next step...`));
   }
 
   if (steps >= options.maxSteps) {
