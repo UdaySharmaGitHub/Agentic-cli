@@ -1,7 +1,7 @@
 {
   "name": "agentic-cli",
   "version": "4.2.0",
-  "description": "A terminal-based agentic CLI powered by Google Gemini with a ReAct agent loop",
+  "description": "A terminal-based agentic CLI powered by any OpenAI-compatible API (LiteLLM Proxy, OpenAI, etc.) with a ReAct agent loop",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0",
-    "@google/generative-ai": "^0.21.0",
+    "openai": "^4.x.x",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "dotenv": "^16.4.5",
@@ -45,7 +45,7 @@
   "keywords": [
     "cli",
     "agent",
-    "gemini",
+
     "ai",
     "typescript",
     "repl"

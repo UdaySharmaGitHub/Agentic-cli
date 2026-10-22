@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import "dotenv/config";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createInterface } from "node:readline";
-import { getToolDefinitions, executeTool } from "./tools/index.js";
+import { executeTool } from "./tools/index.js";
 import type { ConfirmFn } from "./tools/types.js";
+import type { ChatMessage } from "./memory.js";
+import { createClient, streamMessage } from "./openai.js";
+import { DEFAULT_MODEL } from "./config.js";
 import {
   printBanner,
   printWelcome,
   printHelp,
   printStatus,
-  printAgentResponse,
   printAgentStep,
   printAgentComplete,
   printAgentMaxSteps,
@@ -20,20 +21,17 @@ import {
 } from "./ui.js";
 
 async function main() {
-  const apiKey = process.env["GEMINI_API_KEY"];
+  const apiKey = process.env["API_KEY"];
   if (!apiKey) {
-    console.error("Error: GEMINI_API_KEY is not set. Copy .env.example to .env and fill it in.");
+    console.error("Error: API_KEY is not set. Copy .env.example to .env and fill it in.");
     process.exit(1);
   }
 
   const yolo = process.argv.includes("--yolo");
-  const modelId = "gemini-2.5-flash";
+  const modelId = DEFAULT_MODEL;
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: modelId });
-
-  const toolDefs = getToolDefinitions();
-  const history: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [];
+  const client = createClient(modelId);
+  const history: ChatMessage[] = [];
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " });
 
@@ -72,61 +70,65 @@ async function main() {
     if (input === "/help") { printHelp(); rl.prompt(); return; }
     if (input === "/status") { printStatus(modelId, history.length); rl.prompt(); return; }
 
-    history.push({ role: "user", parts: [{ text: input }] });
+    history.push({ role: "user", content: input });
 
     const spinner = createSpinner("Thinking…").start();
     let steps = 0;
     const maxSteps = 15;
 
     try {
-      const chat = model.startChat({
-        history,
-        tools: [{
-          functionDeclarations: toolDefs.map((t) => ({
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters as never,
-          })),
-        }],
-      });
+      let continueLoop = true;
 
-      let result = await chat.sendMessage(input);
-      spinner.stop();
+      while (continueLoop && steps < maxSteps) {
+        let textStarted = false;
 
-      // Agentic tool-call loop
-      while (result.response.functionCalls()?.length && steps < maxSteps) {
-        steps++;
-        if (steps > 1) printAgentStep(steps, maxSteps);
+        const response = await streamMessage(client, modelId, "", history, (text) => {
+          if (!textStarted) {
+            spinner.stop();
+            textStarted = true;
+            console.log();
+          }
+          process.stdout.write(text);
+        });
 
-        const calls = result.response.functionCalls()!;
-        const toolResponses: Array<{ functionResponse: { name: string; response: unknown } }> = [];
+        if (!textStarted) spinner.stop();
+        if (textStarted) console.log();
 
-        for (const call of calls) {
-          const toolResult = await executeTool(
-            call.name,
-            call.args as Record<string, unknown>,
-            confirm,
-          );
-          printToolResult(call.name, toolResult.output);
-          toolResponses.push({
-            functionResponse: { name: call.name, response: { output: toolResult.output } },
+        // Add assistant message to history
+        if (response.toolCalls.length > 0) {
+          history.push({
+            role: "assistant",
+            content: response.text || null,
+            tool_calls: response.toolCalls,
           });
+        } else {
+          history.push({ role: "assistant", content: response.text });
         }
 
-        spinner.start("Thinking…");
-        result = await chat.sendMessage(toolResponses as never);
-        spinner.stop();
+        if (response.toolCalls.length === 0) {
+          if (steps > 0) printAgentComplete(steps);
+          continueLoop = false;
+        } else {
+          steps++;
+          if (steps > 1) printAgentStep(steps, maxSteps);
+
+          for (const call of response.toolCalls) {
+            const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
+            const toolResult = await executeTool(call.function.name, args, confirm);
+            printToolResult(call.function.name, toolResult.output);
+            history.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: toolResult.output,
+            });
+          }
+
+          spinner.start("Thinking…");
+        }
       }
 
       if (steps >= maxSteps) {
         printAgentMaxSteps(maxSteps);
-      } else {
-        const text = result.response.text();
-        if (text) {
-          printAgentResponse(text);
-          history.push({ role: "model", parts: [{ text }] });
-        }
-        if (steps > 0) printAgentComplete(steps);
       }
     } catch (err) {
       spinner.stop();
