@@ -136,6 +136,8 @@ export function printHelp(): void {
   console.log(chalk.dim('    /exit /quit     — Exit the CLI'));
   console.log(chalk.dim('    /clear          — Clear conversation history'));
   console.log(chalk.dim('    /help           — Show this help'));
+  console.log(chalk.dim('    /export [html|md|sh|both]  — Export session as runbook'));
+  console.log(chalk.dim('    /replay <file.sh>          — Replay a runbook step by step'));
   console.log();
   console.log(chalk.bold('  Flags:'));
   console.log(chalk.dim('    --yolo          — Auto-approve all actions'));
@@ -154,6 +156,62 @@ export function printStatus(model: string, historyLength: number): void {
   console.log(`  Model:    ${chalk.white(model)}`);
   console.log(`  History:  ${chalk.white(String(historyLength))} messages`);
   console.log(chalk.dim('  ──────────────────────────────────────────────────'));
+  console.log();
+}
+
+export function printExportSuccess(files: string[]): void {
+  console.log();
+  console.log(chalk.green.bold('  ✔ Runbook exported:'));
+  for (const f of files) {
+    console.log(chalk.white(`    ${f}`));
+  }
+  console.log();
+}
+
+export function printExportEmpty(): void {
+  console.log();
+  console.log(chalk.yellow('  ⚠  Nothing to export — run a task first.'));
+  console.log();
+}
+
+export function printExportUsage(): void {
+  console.log();
+  console.log(chalk.dim('  Usage: /export [html|md|sh|both]'));
+  console.log(chalk.dim('    html — Shareable HTML page (default)'));
+  console.log(chalk.dim('    md   — Markdown runbook'));
+  console.log(chalk.dim('    sh   — Executable shell script (run_command steps only)'));
+  console.log(chalk.dim('    both — Export all three formats'));
+  console.log();
+}
+
+// ── Replay ────────────────────────────────────────────────────────────────────
+
+export function printReplayHeader(task: string, count: number): void {
+  console.log();
+  console.log(chalk.cyan.bold('  ┌─ Replay Runbook ─────────────────────────────────┐'));
+  console.log(chalk.white(`  │  Task:     ${task}`));
+  console.log(chalk.white(`  │  Commands: ${count}`));
+  console.log(chalk.cyan('  └───────────────────────────────────────────────────'));
+  console.log();
+}
+
+export function printReplayStep(current: number, total: number, reasoning: string, command: string): void {
+  console.log();
+  console.log(chalk.cyan(`  ── Command ${current} / ${total} ${'─'.repeat(38)}`));
+  if (reasoning) console.log(chalk.dim(`  Reasoning: ${reasoning}`));
+  console.log(chalk.yellow(`  $ ${command}`));
+  console.log();
+}
+
+export function printReplayComplete(done: number, total: number): void {
+  console.log();
+  console.log(chalk.green(`  ✔ Replay complete — ${done}/${total} command(s) executed.`));
+  console.log();
+}
+
+export function printReplayUsage(): void {
+  console.log();
+  console.log(chalk.dim('  Usage: /replay <path-to-runbook.sh>'));
   console.log();
 }
 
