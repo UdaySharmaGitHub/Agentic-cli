@@ -16,9 +16,27 @@ import {
   printAgentMaxSteps,
   printAgentError,
   printToolResult,
+  printRejected,
   createSpinner,
   formatConfirmPrompt,
+  printExportSuccess,
+  printExportEmpty,
+  printExportUsage,
+  printReplayHeader,
+  printReplayStep,
+  printReplayComplete,
+  printReplayUsage,
 } from "./ui.js";
+import {
+  initSession,
+  setCurrentTask,
+  recordStep,
+  hasSteps,
+  exportMarkdown,
+  exportShell,
+  exportHtml,
+} from "./runbook.js";
+import { parseShellRunbook } from "./replay.js";
 
 async function main() {
   const apiKey = process.env["API_KEY"];
@@ -52,6 +70,7 @@ async function main() {
 
   await printBanner();
   printWelcome();
+  initSession(modelId);
   rl.prompt();
 
   rl.on("line", async (line) => {
@@ -70,7 +89,58 @@ async function main() {
     if (input === "/help") { printHelp(); rl.prompt(); return; }
     if (input === "/status") { printStatus(modelId, history.length); rl.prompt(); return; }
 
+    if (input.startsWith("/export")) {
+      const arg = input.slice("/export".length).trim().toLowerCase() || "html";
+      if (!["md", "sh", "html", "both"].includes(arg)) { printExportUsage(); rl.prompt(); return; }
+      if (!hasSteps()) { printExportEmpty(); rl.prompt(); return; }
+      try {
+        const exported: string[] = [];
+        if (arg === "md")   exported.push(await exportMarkdown());
+        if (arg === "sh")   exported.push(await exportShell());
+        if (arg === "html") exported.push(await exportHtml());
+        if (arg === "both") {
+          exported.push(await exportMarkdown());
+          exported.push(await exportShell());
+          exported.push(await exportHtml());
+        }
+        printExportSuccess(exported);
+      } catch (err) {
+        printAgentError(err instanceof Error ? err.message : String(err));
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (input.startsWith("/replay")) {
+      const filePath = input.slice("/replay".length).trim();
+      if (!filePath) { printReplayUsage(); rl.prompt(); return; }
+      try {
+        const runbook = await parseShellRunbook(filePath);
+        if (runbook.steps.length === 0) {
+          printAgentError("No commands found in that runbook.");
+          rl.prompt();
+          return;
+        }
+        printReplayHeader(runbook.task, runbook.steps.length);
+        let done = 0;
+        for (const step of runbook.steps) {
+          printReplayStep(done + 1, runbook.steps.length, step.reasoning, step.command);
+          const approved = await confirm(`Run: ${step.command}`);
+          if (!approved) { printRejected(); continue; }
+          const result = await executeTool("run_command", { command: step.command }, confirm);
+          printToolResult("run_command", result.output);
+          done++;
+        }
+        printReplayComplete(done, runbook.steps.length);
+      } catch (err) {
+        printAgentError(err instanceof Error ? err.message : String(err));
+      }
+      rl.prompt();
+      return;
+    }
+
     history.push({ role: "user", content: input });
+    setCurrentTask(input);
 
     const spinner = createSpinner("Thinking…").start();
     let steps = 0;
@@ -116,6 +186,12 @@ async function main() {
             const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
             const toolResult = await executeTool(call.function.name, args, confirm);
             printToolResult(call.function.name, toolResult.output);
+            recordStep({
+              reasoning: response.text ?? "",
+              toolName: call.function.name,
+              toolArgs: args,
+              toolResult: toolResult.output,
+            });
             history.push({
               role: "tool",
               tool_call_id: call.id,
