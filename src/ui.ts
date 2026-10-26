@@ -24,7 +24,7 @@ export async function printBanner(): Promise<void> {
   console.log(bannerLines.map((line, i) => chalk.rgb(...gradientColors[i])(line)).join('\n'));
   console.log();
   console.log(chalk.dim('  Agentic CLI v4.2'));
-  console.log(chalk.dim('  Powered by Google Gemini'));
+  console.log(chalk.dim('  Powered by OpenAI-compatible API'));
   console.log();
 }
 
