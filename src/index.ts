@@ -26,6 +26,9 @@ import {
   printReplayStep,
   printReplayComplete,
   printReplayUsage,
+  printTokenLine,
+  printCompactSuccess,
+  printCompactSkipped,
 } from "./ui.js";
 import {
   initSession,
@@ -37,6 +40,7 @@ import {
   exportHtml,
 } from "./runbook.js";
 import { parseShellRunbook } from "./replay.js";
+import { recordUsage, getLastTurn, getSession, resetTokens } from "./tokens.js";
 
 async function main() {
   const apiKey = process.env["API_KEY"];
@@ -85,9 +89,62 @@ async function main() {
     if (!input) { rl.prompt(); return; }
 
     if (input === "/exit" || input === "/quit") { process.exit(0); }
-    if (input === "/clear") { history.length = 0; console.clear(); rl.prompt(); return; }
+    if (input === "/clear") { history.length = 0; resetTokens(); console.clear(); rl.prompt(); return; }
     if (input === "/help") { printHelp(); rl.prompt(); return; }
-    if (input === "/status") { printStatus(modelId, history.length); rl.prompt(); return; }
+    if (input === "/status") {
+      const last = getLastTurn();
+      const sess = getSession();
+      printStatus(modelId, history.length, last
+        ? { lastPrompt: last.promptTokens, sessionTotal: sess.totalTokens }
+        : undefined,
+      );
+      rl.prompt();
+      return;
+    }
+
+    if (input === "/compact") {
+      const KEEP_LAST = 6;
+      if (history.length < KEEP_LAST + 2) {
+        printCompactSkipped();
+        rl.prompt();
+        return;
+      }
+      const oldMessages = history.slice(0, history.length - KEEP_LAST);
+      const recentMessages = history.slice(history.length - KEEP_LAST);
+      const compactSpinner = createSpinner("Summarising context...").start();
+      try {
+        const summaryMessages: ChatMessage[] = [
+          ...oldMessages,
+          {
+            role: "user",
+            content:
+              "Provide a dense, structured summary of our conversation so far. Include: tasks attempted, tools used, files created/modified, commands run and their outcomes, key decisions, and any context needed to continue seamlessly. Be specific — include file names, command outputs, and concrete results.",
+          },
+        ];
+        const summaryResponse = await streamMessage(client, modelId, "", summaryMessages, () => {});
+        compactSpinner.stop();
+        if (summaryResponse.usage) recordUsage(summaryResponse.usage);
+        const newHistory: ChatMessage[] = [
+          {
+            role: "user",
+            content: `[COMPACTED — ${oldMessages.length} prior messages summarised]\n\n${summaryResponse.text}`,
+          },
+          {
+            role: "assistant",
+            content: "Understood. I have full context from the summarised history and am ready to continue.",
+          },
+          ...recentMessages,
+        ];
+        history.length = 0;
+        history.push(...newHistory);
+        printCompactSuccess(oldMessages.length, KEEP_LAST);
+      } catch (err) {
+        compactSpinner.stop();
+        printAgentError(err instanceof Error ? err.message : String(err));
+      }
+      rl.prompt();
+      return;
+    }
 
     if (input.startsWith("/export")) {
       const arg = input.slice("/export".length).trim().toLowerCase() || "html";
@@ -164,6 +221,9 @@ async function main() {
         if (!textStarted) spinner.stop();
         if (textStarted) console.log();
 
+        // Track token usage from every API call
+        if (response.usage) recordUsage(response.usage);
+
         // Add assistant message to history
         if (response.toolCalls.length > 0) {
           history.push({
@@ -209,6 +269,11 @@ async function main() {
     } catch (err) {
       spinner.stop();
       printAgentError(err instanceof Error ? err.message : String(err));
+    }
+
+    const last = getLastTurn();
+    if (last) {
+      printTokenLine(last.promptTokens, getSession().totalTokens);
     }
 
     rl.prompt();
