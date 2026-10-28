@@ -136,6 +136,8 @@ export function printHelp(): void {
   console.log(chalk.dim('    /exit /quit     — Exit the CLI'));
   console.log(chalk.dim('    /clear          — Clear conversation history'));
   console.log(chalk.dim('    /help           — Show this help'));
+  console.log(chalk.dim('    /status         — Show model, history length, and token usage'));
+  console.log(chalk.dim('    /compact        — Summarise old messages to free context space'));
   console.log(chalk.dim('    /export [html|md|sh|both]  — Export session as runbook'));
   console.log(chalk.dim('    /replay <file.sh>          — Replay a runbook step by step'));
   console.log();
@@ -150,11 +152,22 @@ export function printHelp(): void {
   console.log();
 }
 
-export function printStatus(model: string, historyLength: number): void {
+export function printStatus(
+  model: string,
+  historyLength: number,
+  tokenInfo?: { lastPrompt: number; sessionTotal: number },
+): void {
   console.log();
   console.log(chalk.cyan.bold('  ── Status ────────────────────────────────────────'));
   console.log(`  Model:    ${chalk.white(model)}`);
   console.log(`  History:  ${chalk.white(String(historyLength))} messages`);
+  if (tokenInfo) {
+    const fmt = (n: number) => n.toLocaleString();
+    console.log(`  Tokens:   ${chalk.white(fmt(tokenInfo.lastPrompt))} (last prompt)  ·  ${chalk.white(fmt(tokenInfo.sessionTotal))} (session)`);
+    if (tokenInfo.lastPrompt > 60_000) {
+      console.log(chalk.yellow('            ⚠️  Context is large — run /compact to free space'));
+    }
+  }
   console.log(chalk.dim('  ──────────────────────────────────────────────────'));
   console.log();
 }
@@ -223,4 +236,32 @@ export function formatConfirmPrompt(message: string): string {
 
 export function formatToolResult(name: string, output: string): string {
   return `[${name}]\n${output}`;
+}
+
+// ── Token & compact display ───────────────────────────────────────────────────
+
+export function printTokenLine(lastPrompt: number, sessionTotal: number): void {
+  const fmt = (n: number) => n.toLocaleString();
+  const warn = lastPrompt > 60_000;
+  const line = `  📊 ${fmt(lastPrompt)} tokens (prompt)  ·  ${fmt(sessionTotal)} total`;
+  if (warn) {
+    console.log(chalk.yellow(line + '  ⚠️  run /compact to free context'));
+  } else {
+    console.log(chalk.dim(line));
+  }
+  console.log();
+}
+
+export function printCompactSuccess(removedCount: number, keptCount: number): void {
+  console.log();
+  console.log(chalk.green.bold('  ✔ Context compacted:'));
+  console.log(chalk.dim(`    ${removedCount} old message(s) → 1 summary block`));
+  console.log(chalk.dim(`    ${keptCount} most-recent message(s) kept intact`));
+  console.log();
+}
+
+export function printCompactSkipped(): void {
+  console.log();
+  console.log(chalk.dim('  Context is short — no compaction needed.'));
+  console.log();
 }
