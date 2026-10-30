@@ -1,105 +1,63 @@
-# Migration: Chalk Static UI → Ink React TUI
+# Migration: Chalk UI → Ink React TUI
 
 **Type:** Enhancement / Refactor  
 **Priority:** High  
-**Area:** `src/ui.ts`, `src/index.ts`, `src/openai.ts`  
-**Status:** Open
+**Area:** `src/ui.ts`, `src/index.ts`, `src/agent.ts`, `src/openai.ts`  
+**Status:** Open — Ink TUI implementation pending
 
 ---
 
 ## Summary
 
-Agentic-cli's current UI is built entirely with `chalk` (static `console.log` calls) and `readline` (raw node interface). This produces a static, non-interactive terminal experience with no real-time feedback, no cursor navigation, and no live updates. The goal is to migrate to **[Ink](https://github.com/vadimdemedes/ink)** — the React-for-CLI framework that powers Claude Code, GitHub Copilot CLI, and similar tools — to deliver an interactive, component-driven TUI that matches the quality of modern developer tools.
+Migrate the existing chalk + readline UI to **[Ink](https://github.com/vadimdemedes/ink)** — the React-for-CLI framework — to gain in-place rendering, live token streaming, keyboard-driven interactions, and terminal-resize responsiveness.
 
-> **Note:** The codebase has already been migrated from the Gemini SDK to the OpenAI-compatible API (`src/openai.ts`, default model `gpt-4.1-mini`). This TUI migration builds on top of that updated client.
-
-> **Why Ink over Bubble Tea?**  
-> Bubble Tea is a Go TUI framework. Agentic-cli is TypeScript/Node.js. Ink is the idiomatic equivalent for the Node ecosystem: same reactive model, same component tree, runs natively in the existing build pipeline (`tsx`, `tsup`).
+The current chalk UI is fully functional and defines the visual design. The Ink migration is a **reimplementation of the same design** using React components — not a redesign.
 
 ---
 
-## Problem with the Current UI
+## ⚠️ Design Constraint — Do NOT Change the UI
+
+The existing chalk UI in `src/ui.ts` defines the look and feel of the CLI. Every Ink component must replicate the current visual output exactly:
+
+| Element | Current chalk output | Ink must match |
+|---|---|---|
+| Banner | 6-line orange→red gradient ASCII art | Same gradient, same font, same spacing |
+| Tool header | `┌─ Tool: name` cyan box with `│ description` | Same box-drawing chars, same cyan color |
+| Step counter | `┌─ Step N / Max ─────┐` cyan bold | Same format |
+| Agent response | `🤖 Agent:` cyan bold header, white body text | Same icons, same colors |
+| Spinner | `ora` dots spinner, `  Thinking...` | Same text, same indent |
+| Tool result | Dim `── Result: name ──` + dimmed output (max 20 lines) | Same truncation, same dimming |
+| Success | Green `✅ msg` | Same |
+| Error | Red `❌ msg` | Same |
+| Blocked | Red bold `🚫 BLOCKED: reason` | Same |
+| Rejected | Yellow `✖ Action rejected by user.` | Same |
+| Confirm prompt | `▶ message [y/N]` yellow arrow, dim brackets | Same |
+| Separator | Dim `────────────────────` | Same |
+
+**No new colors, no new layouts, no new icons** unless separately agreed. The goal is a 1:1 visual port with the added benefit of Ink's rendering model.
+
+---
+
+## Prerequisites Completed
+
+| Item | Status | PR |
+|---|---|---|
+| Migrate Gemini SDK → OpenAI-compatible API | ✅ Done | PR #4 |
+| Session runbook export (`/export`) | ✅ Done | PR #6 |
+| Session replay (`/replay`) | ✅ Done | PR #6 |
+
+---
+
+## Problems with the Current Chalk UI
 
 | Issue | Current Behavior |
 |---|---|
-| Static rendering | All output is one-way `console.log`; nothing updates in-place |
-| No live streaming | AI response text is printed line-by-line with no real-time token streaming UI |
-| Busy spinner only | `ora` spinner blocks the display; no side-by-side status |
-| Raw `readline` input | No styled prompt, no history navigation hints, no placeholder text |
-| Blocked re-render | Once a banner is printed, it cannot be updated (e.g. to show token count) |
-| No keyboard shortcuts | No Ctrl+C handling, no Esc to cancel a tool call mid-flight |
-| No confirmation UX | Tool approval (`y/n`) is a plain readline question; no styled dialog |
-
----
-
-## Proposed Libraries
-
-### Core
-
-| Package | Purpose | Used by |
-|---|---|---|
-| `ink` | React component renderer for the terminal | Claude Code, GitHub Copilot CLI |
-| `react` + `react-reconciler` | Component model (Ink peer deps) | — |
-| `@inkjs/ui` | Ready-made Ink component kit (TextInput, Spinner, Badge, etc.) | Ink ecosystem |
-
-### Input & Selection
-
-| Package | Purpose |
-|---|---|
-| `ink-text-input` | Styled text input with cursor, placeholder, history |
-| `ink-select-input` | Arrow-key navigable select menu (replaces `@clack/prompts` select) |
-
-### Feedback & Display
-
-| Package | Purpose |
-|---|---|
-| `ink-spinner` | Named spinners (dots, line, arc) rendered inside a live component |
-| `ink-table` | Tabular output for `/status`, history, tool results |
-| `ink-syntax-highlight` | Code block highlighting inside chat responses |
-| `ink-markdown` | Markdown rendering for AI response text |
-
-### Dev
-
-| Package | Purpose |
-|---|---|
-| `@types/react` | TypeScript types for JSX |
-| `ink-testing-library` | Unit-test Ink components without a real terminal |
-
----
-
-## Target Experience (Inspired by Claude Code & OpenCode)
-
-```
-╭─────────────────────────────────────────────────────────╮
-│  Agentic-cli  v4.2  ·  gpt-4.1-mini  ·  10 msgs  ·  YOLO  │
-╰─────────────────────────────────────────────────────────╯
-
-  🤖  The recursive Fibonacci approach has O(2ⁿ) time…
-      Here is an optimized version using memoization:
-
-      ┌──────────────────────────────────────────────────┐
-      │  function fib(n, memo = {}) {                    │
-      │    if (n in memo) return memo[n];                │
-      │    if (n <= 1) return n;                         │
-      │    memo[n] = fib(n-1, memo) + fib(n-2, memo);   │
-      │    return memo[n];                               │
-      │  }                                               │
-      └──────────────────────────────────────────────────┘
-
-  ⚙  run_command  ·  node fib.js        [y/n] ▋
-
-  > Ask a follow-up…
-    ↑↓ history · Tab /commands · Esc cancel
-```
-
-Key improvements:
-- **Persistent status bar** (model, session stats) always visible at top
-- **Live streaming** — tokens render in place as they arrive, no line-jumping
-- **Inline tool approval dialog** — styled `[y/n]` prompt with keyboard shortcut hints
-- **Syntax-highlighted code blocks** inside AI responses
-- **Markdown rendering** — bold, italic, lists, headings
-- **History-aware input** with placeholder and Tab autocomplete
-- **Cancellable operations** — Esc cancels pending tool calls
+| No in-place rendering | Tokens scroll the terminal; previous lines cannot update |
+| No resize handling | Layout breaks if the terminal is resized mid-session |
+| Raw `readline` input | No styled prompt, no placeholder, no history hints |
+| `ora` + `readline` conflict | `ora` must use `discardStdin: false` workaround to avoid stealing stdin from confirm prompts |
+| No keyboard shortcuts | No Esc to cancel a tool call mid-flight |
+| Confirm UX | Plain `y/n` readline question with no visual styling |
 
 ---
 
@@ -108,12 +66,12 @@ Key improvements:
 ### Phase 1 — Setup & Scaffolding
 
 - [ ] Add Ink and component libraries to `package.json`
-- [ ] Configure `tsconfig.json` for JSX (`"jsx": "react"`)
-- [ ] Create `src/tui/` directory for all Ink components
-- [ ] Add `src/tui/index.tsx` as the Ink `render()` entry point
-- [ ] Keep existing `src/ui.ts` intact during migration (run in parallel)
+- [ ] Configure `tsconfig.json` for JSX (`"jsx": "react"`, `"jsxImportSource": "react"`)
+- [ ] Create `src/tui/` directory
+- [ ] Add `src/tui/index.tsx` as the `render(<App />)` entry point
+- [ ] Keep `src/ui.ts` intact as the design reference until all components are verified
 
-**New dependencies to add:**
+**Dependencies to add:**
 ```json
 {
   "ink": "^5.1.0",
@@ -126,8 +84,6 @@ Key improvements:
   "ink-syntax-highlight": "^3.0.0"
 }
 ```
-
-**Dev dependencies:**
 ```json
 {
   "@types/react": "^18.3.0",
@@ -139,76 +95,116 @@ Key improvements:
 
 ### Phase 2 — Component Tree
 
+Each component below maps 1:1 to an existing function in `src/ui.ts`.
+
 ```
 src/tui/
-├── index.tsx           ← render(<App />) entry, replaces printBanner()
-├── App.tsx             ← root: status bar + chat pane + input bar
+├── index.tsx                  ← render(<App />) entry
+├── App.tsx                    ← root: status bar + chat pane + input bar
 ├── components/
-│   ├── StatusBar.tsx       ← model · session · mode badges (top bar)
-│   ├── ChatHistory.tsx     ← scrollable message list
-│   ├── MessageBubble.tsx   ← user / assistant message with markdown
-│   ├── StreamingMessage.tsx← live token stream (useStream hook)
-│   ├── ToolCall.tsx        ← tool name, args, output, inline y/n confirm
-│   ├── ToolConfirmDialog.tsx← styled approval [y/N] with Esc-cancel
-│   ├── InputBar.tsx        ← TextInput + hints footer
-│   ├── SelectRole.tsx      ← replaces @clack select for KB role picker
-│   ├── SetupWizard.tsx     ← replaces current intro/password/select flow
-│   └── HelpPanel.tsx       ← replaces printHelp()
+│   ├── Banner.tsx             ← replaces printBanner() — gradient ASCII art
+│   ├── StatusBar.tsx          ← replaces printStatus()
+│   ├── ChatHistory.tsx        ← scrollable message list
+│   ├── MessageBubble.tsx      ← replaces printAgentResponse()
+│   ├── StreamingMessage.tsx   ← live token stream (replaces process.stdout.write)
+│   ├── ToolCall.tsx           ← replaces printToolHeader/Success/Error/Result
+│   ├── ToolConfirmDialog.tsx  ← replaces formatConfirmPrompt + readline y/n
+│   ├── InputBar.tsx           ← replaces readline prompt
+│   ├── StepIndicator.tsx      ← replaces printAgentStep/Complete/MaxSteps
+│   └── HelpPanel.tsx          ← replaces printHelp()
 └── hooks/
-    ├── useStream.ts        ← subscribes to OpenAI-compatible token stream (via EventEmitter), updates state
-    ├── useHistory.ts       ← input history (↑↓ navigation)
-    └── useConfirm.ts       ← promise-based keyboard y/n resolver
+    ├── useStream.ts           ← EventEmitter → React state for token streaming
+    ├── useHistory.ts          ← ↑↓ input history navigation
+    ├── useConfirm.ts          ← promise-based keyboard y/n resolver
+    └── useTerminalSize.ts     ← listens for resize, returns { columns, rows }
 ```
 
 ---
 
-### Phase 3 — Component Implementation Details
+### Phase 3 — Responsiveness Requirement
 
-#### `App.tsx`
-Root component. Holds global state (messages, activeStream, pendingTool). Passes dispatch functions down via context.
+After the Ink migration is complete, the TUI **must respond correctly to terminal resize**. This is a hard requirement — not optional.
 
-#### `StatusBar.tsx`
-Rendered with `ink`'s `Box` at fixed position. Shows:
-- Model name (badge)
-- Message count
-- YOLO mode indicator (amber badge)
-- KB role (green badge when active)
-- Session uptime
+#### What must happen on resize
 
-#### `StreamingMessage.tsx`
-Uses a custom `useStream` hook that listens on an `EventEmitter` the agent emits tokens to. Tokens come from the OpenAI-compatible streaming API (`streamMessage` in `src/openai.ts` via `openai` SDK). Renders partial text into a `Text` component that Ink reconciles in-place — this eliminates the current line-jumping behavior.
+| Element | Expected behavior |
+|---|---|
+| Banner | Stays centered or left-aligned; does not overflow or truncate awkwardly |
+| Tool header box (`┌─ Tool: …`) | Width scales to terminal width, capped at a sensible max (e.g. 80 cols) |
+| Step counter box | Same — scales width |
+| Chat history | Rewraps text to new column width |
+| Input bar | Stretches to full terminal width |
+| Status bar | Truncates gracefully if the terminal is too narrow |
+| Separator line | Matches current terminal width |
 
-#### `ToolCall.tsx`
-Renders a styled box (similar to current `printToolHeader`) but as a React component. When awaiting confirmation, renders `ToolConfirmDialog` inline with `[y/N]` driven by `useInput` from Ink — no readline required.
+#### How to implement
 
-#### `InputBar.tsx`
-Uses `ink-text-input` for the prompt. Footer shows:
+Use the `useTerminalSize` hook (`src/tui/hooks/useTerminalSize.ts`) in components that need width-aware layout:
+
+```ts
+import { useStdout } from 'ink';
+import { useState, useEffect } from 'react';
+
+export function useTerminalSize() {
+  const { stdout } = useStdout();
+  const [size, setSize] = useState({
+    columns: stdout.columns ?? 80,
+    rows: stdout.rows ?? 24,
+  });
+
+  useEffect(() => {
+    const handler = () =>
+      setSize({ columns: stdout.columns, rows: stdout.rows });
+    stdout.on('resize', handler);
+    return () => { stdout.off('resize', handler); };
+  }, [stdout]);
+
+  return size;
+}
 ```
-↑↓ history  ·  Tab /commands  ·  Esc cancel  ·  Enter submit
+
+Components use `columns` to calculate dynamic widths:
+
+```tsx
+const { columns } = useTerminalSize();
+const boxWidth = Math.min(columns - 4, 80); // 4 = indent + border
 ```
-Passes submitted value to the parent `App` via `onSubmit` callback.
+
+#### Minimum terminal width
+
+The TUI must remain usable at **40 columns**. Below that, display a single-line fallback:
+```
+⚠  Terminal too narrow — resize to 40+ cols
+```
+
+#### Testing resize
+
+After implementation, manually verify:
+1. Start a session and resize the terminal narrower and wider while a response is streaming
+2. Resize during a tool call confirm prompt
+3. Resize to below 40 columns — fallback message appears
+4. Resize back to normal — full UI restores
 
 ---
 
 ### Phase 4 — Agent Integration
 
-The agent (`src/agent.ts`) currently calls `ui.ts` functions directly and uses the OpenAI-compatible streaming API via `src/openai.ts`. After migration:
-
-1. The `ConfirmFn` will resolve via `useConfirm` hook (keyboard input captured by Ink's `useInput`) instead of `readline.question`
-2. Streaming tokens will be emitted via `EventEmitter` that `StreamingMessage` subscribes to — the underlying stream already comes from `streamMessage()` in `src/openai.ts`
-3. Tool headers/results will be emitted as structured events, rendered by `ToolCall` component
-4. `runAgentTurn` will return structured `AgentEvent` objects; the Ink `App` renders them
+1. `ConfirmFn` resolves via `useConfirm` hook instead of `readline.question`
+2. Streaming tokens emitted via `EventEmitter` → consumed by `useStream` → rendered by `StreamingMessage`
+3. Tool calls emitted as structured events → rendered by `ToolCall` component
+4. `/export` and `/replay` slash commands carried over to the Ink input handler in `InputBar.tsx`
 
 ---
 
 ### Phase 5 — Cutover & Cleanup
 
-- [ ] Remove `chalk` from `src/ui.ts` (keep only as utility in agent output if needed)
-- [ ] Remove `ora` (replaced by `ink-spinner` inside components)
+- [ ] Verify every `src/ui.ts` function has a matching Ink component (visual diff check)
+- [ ] Verify resize behavior at multiple terminal widths (40, 80, 120, 200 columns)
+- [ ] Remove `ora` (replaced by `ink-spinner` inside `StreamingMessage`)
 - [ ] Remove `readline` from `src/index.ts` (replaced by `InputBar`)
-- [ ] Remove `@clack/prompts` (replaced by `SetupWizard.tsx` + `SelectRole.tsx`)
-- [ ] Delete `src/ui.ts` once all exports are covered by TUI components
-- [ ] Update `tsup` build config to handle JSX (add `--format esm --jsx react`)
+- [ ] Remove `@clack/prompts` if used
+- [ ] Delete `src/ui.ts`
+- [ ] Update `tsup` build config: `--jsx react`
 
 ---
 
@@ -216,30 +212,30 @@ The agent (`src/agent.ts`) currently calls `ui.ts` functions directly and uses t
 
 | File | Change |
 |---|---|
-| `src/ui.ts` | Delete (replaced by `src/tui/`) |
-| `src/index.ts` | Replace `readline` REPL + `printBanner()` with `render(<App />)` |
-| `src/agent.ts` | Emit `AgentEvent` objects instead of calling `ui.*` functions directly |
-| `src/openai.ts` | Wire streaming tokens to `EventEmitter` consumed by `StreamingMessage` |
+| `src/ui.ts` | Delete after all components verified |
+| `src/index.ts` | Replace `readline` REPL with `render(<App />)` |
+| `src/agent.ts` | Emit structured events instead of calling `ui.*` directly |
+| `src/openai.ts` | Wire streaming tokens to `EventEmitter` for `useStream` |
+| `src/runbook.ts` | Keep as-is; called from `App.tsx` for `/export` |
+| `src/replay.ts` | Keep as-is; called from `App.tsx` for `/replay` |
 | `tsconfig.json` | Add `"jsx": "react"`, `"jsxImportSource": "react"` |
-| `package.json` | Add Ink + component packages; remove `ora`, `@clack/prompts` |
+| `package.json` | Add Ink packages; remove `ora`, `@clack/prompts` |
 
 ---
 
 ## Open Questions
 
-1. **Scrollback behavior** — Ink renders a fixed viewport. Need to decide: full-screen takeover (like Claude Code) or scrolling passthrough mode for piped output.
-2. **Non-TTY / CI mode** — When `stdout` is not a TTY (piped, scripted), fall back to the current chalk-based output path. Ink's `isRawModeSupported` flag handles detection.
-3. **`--yolo` flag** — Currently skips all confirms. In Ink, `ToolConfirmDialog` should auto-resolve when this flag is set, without rendering the dialog at all.
-4. **Windows support** — Ink requires a VT100-compatible terminal. Windows Terminal works; CMD.exe does not. Document the requirement.
+1. **Full-screen vs scroll-through** — Ink full-screen takeover (like Claude Code) or passthrough mode? Full-screen gives better resize control but changes how output pipes behave.
+2. **Non-TTY / CI mode** — When stdout is not a TTY, fall back to the current chalk path. Detect with `ink`'s `isRawModeSupported`.
+3. **Minimum width fallback** — 40 columns chosen as minimum. Is this right for the target users?
 
 ---
 
 ## References
 
-- [Ink GitHub](https://github.com/vadimdemedes/ink) — React for CLIs
-- [@inkjs/ui](https://github.com/vadimdemedes/ink/tree/main/packages/ui) — component library
-- [OpenCode TUI](https://github.com/sst/opencode) — Go/Bubble Tea reference for UX patterns
-- [Claude Code](https://github.com/anthropics/claude-code) — Ink-based CLI reference implementation
+- [Ink GitHub](https://github.com/vadimdemedes/ink)
+- [@inkjs/ui](https://github.com/vadimdemedes/ink/tree/main/packages/ui)
+- [OpenCode TUI](https://github.com/sst/opencode) — UX reference
+- [Claude Code](https://github.com/anthropics/claude-code) — Ink implementation reference
 - [ink-text-input](https://github.com/vadimdemedes/ink-text-input)
-- [ink-select-input](https://github.com/vadimdemedes/ink-select-input)
 - [ink-testing-library](https://github.com/vadimdemedes/ink-testing-library)
