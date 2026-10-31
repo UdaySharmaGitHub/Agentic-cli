@@ -43,6 +43,14 @@ import { parseShellRunbook } from "./replay.js";
 import { recordUsage, getLastTurn, getSession, resetTokens } from "./tokens.js";
 
 async function main() {
+  // Launch Ink TUI when running in a real terminal; fall back to chalk for pipes/CI.
+  if (process.stdout.isTTY) {
+    const { startTUI } = await import("./tui/start.js");
+    await startTUI();
+    return;
+  }
+
+  // ── Chalk fallback for non-TTY environments ──────────────────────────────────
   const apiKey = process.env["API_KEY"];
   if (!apiKey) {
     console.error("Error: API_KEY is not set. Copy .env.example to .env and fill it in.");
