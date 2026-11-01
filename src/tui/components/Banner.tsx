@@ -1,4 +1,3 @@
-import { Box, Text } from 'ink';
 import chalk from 'chalk';
 
 const BANNER_LINES = [
@@ -19,27 +18,21 @@ const GRADIENT: [number, number, number][] = [
   [200,   0,   0],
 ];
 
-export function Banner() {
-  return (
-    <Box flexDirection="column">
-      <Text>{' '}</Text>
-      {BANNER_LINES.map((line, i) => (
-        <Text key={i}>{chalk.rgb(...GRADIENT[i])(line)}</Text>
-      ))}
-      <Text>{' '}</Text>
-      <Text dimColor>{'  Agentic CLI v4.2'}</Text>
-      <Text dimColor>{'  Powered by OpenAI-compatible API'}</Text>
-      <Text>{' '}</Text>
-    </Box>
-  );
+// Print to stdout before Ink takes over so the banner stays in scroll history
+// and is never re-painted by Ink's reconciler.
+export function printBanner(): void {
+  process.stdout.write('\n');
+  for (let i = 0; i < BANNER_LINES.length; i++) {
+    process.stdout.write(chalk.rgb(...GRADIENT[i])(BANNER_LINES[i]) + '\n');
+  }
+  process.stdout.write('\n');
+  process.stdout.write(chalk.dim('  Agentic CLI v4.2') + '\n');
+  process.stdout.write(chalk.dim('  Powered by OpenAI-compatible API') + '\n');
+  process.stdout.write('\n');
 }
 
-export function WelcomeHint() {
-  return (
-    <Box flexDirection="column">
-      <Text bold>{'  🚀 Agent ready! Type your request below.'}</Text>
-      <Text dimColor>{"  (type '/help' for commands, '/exit' to quit)"}</Text>
-      <Text>{' '}</Text>
-    </Box>
-  );
+export function printWelcome(): void {
+  process.stdout.write(chalk.bold('  🚀 Agent ready! Type your request below.') + '\n');
+  process.stdout.write(chalk.dim("  (type '/help' for commands, '/exit' to quit)") + '\n');
+  process.stdout.write('\n');
 }

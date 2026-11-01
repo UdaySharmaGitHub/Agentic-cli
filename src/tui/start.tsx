@@ -1,10 +1,10 @@
+import React from 'react';
 import { render } from 'ink';
-import { createElement } from 'react';
 import { createClient } from '../openai.js';
 import { initSession } from '../runbook.js';
 import { DEFAULT_MODEL } from '../config.js';
-import { printBanner, printWelcome } from '../ui.js';
 import { App } from './App.js';
+import { printBanner, printWelcome } from './components/Banner.js';
 
 export async function startTUI(): Promise<void> {
   const apiKey = process.env['API_KEY'];
@@ -19,13 +19,13 @@ export async function startTUI(): Promise<void> {
 
   initSession(modelId);
 
-  // Print banner and welcome to stdout before Ink takes over the live area.
-  // They stay visible in terminal scroll history above the interactive UI.
-  await printBanner();
+  // Printed to stdout before Ink takes over — stays in terminal scroll history
+  // and is never re-painted by Ink's reconciler.
+  printBanner();
   printWelcome();
 
   const { waitUntilExit } = render(
-    createElement(App, { client, modelId, yolo }),
+    <App client={client} modelId={modelId} yolo={yolo} />,
   );
 
   await waitUntilExit();

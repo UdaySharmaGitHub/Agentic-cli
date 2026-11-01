@@ -20,6 +20,7 @@ import {
 import { parseShellRunbook } from '../replay.js';
 import { executeTool } from '../tools/index.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
+import { useHistory } from './hooks/useHistory.js';
 import { LogItemView } from './components/LogItemView.js';
 import { ThinkingSpinner } from './components/Spinner.js';
 import { ConfirmDialog } from './components/ConfirmDialog.js';
@@ -38,6 +39,7 @@ function nextId() { return String(++_idCounter); }
 export function App({ client, modelId, yolo }: Props) {
   const { exit } = useApp();
   const { columns } = useTerminalSize();
+  const { push: historyPush, up: historyUp, down: historyDown } = useHistory();
 
   const [staticLog, setStaticLog] = useState<LogItem[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
@@ -307,7 +309,7 @@ export function App({ client, modelId, yolo }: Props) {
         />
       )}
       {inputEnabled && !confirmReq && (
-        <InputBar onSubmit={handleSubmit} />
+        <InputBar onSubmit={handleSubmit} push={historyPush} up={historyUp} down={historyDown} />
       )}
     </Box>
   );
