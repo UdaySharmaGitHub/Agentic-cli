@@ -9,6 +9,10 @@ export default defineConfig({
   sourcemap: true,
   dts: false,
   splitting: false,
+  esbuildOptions(options) {
+    options.jsx = "automatic";
+    options.jsxImportSource = "react";
+  },
   external: [
     "@google/generative-ai",
     "@clack/prompts",
@@ -18,5 +22,11 @@ export default defineConfig({
     "execa",
     "fast-glob",
     "ora",
+    "ink",
+    "react",
+    "@inkjs/ui",
+    "ink-text-input",
+    "ink-spinner",
   ],
 });
+
