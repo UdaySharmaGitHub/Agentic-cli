@@ -82,8 +82,12 @@ async function main() {
   const { name: sessionName, path: sessionPath } = await initSessions(requestedSession);
   await loadHistory(sessionPath);
 
-  // After every turn and on exit, persist history
-  const flush = () => { void saveHistory(sessionPath); };
+  // Current session — reassigned on /session switch, new, rename
+  let activeSession = sessionName;
+  let activeSessionPath = sessionPath;
+
+  // Flush current session on signal exit (reads the let, so it follows switches)
+  const flush = () => { void saveHistory(activeSessionPath); };
   process.on("SIGINT", flush);
   process.on("SIGTERM", flush);
 
@@ -116,10 +120,6 @@ async function main() {
   printWelcome();
   initSession(modelId);
   rl.prompt();
-
-  // Keep prompt in sync after session switches
-  let activeSession = sessionName;
-  let activeSessionPath = sessionPath;
 
   rl.on("line", async (line) => {
     const input = line.trim();
