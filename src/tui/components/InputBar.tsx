@@ -7,9 +7,10 @@ interface Props {
   push: (entry: string) => void;
   up: () => string | null;
   down: () => string | null;
+  sessionName?: string;
 }
 
-export function InputBar({ onSubmit, push, up, down }: Props) {
+export function InputBar({ onSubmit, push, up, down, sessionName }: Props) {
   const [value, setValue] = useState('');
 
   useInput((_, key) => {
@@ -30,6 +31,9 @@ export function InputBar({ onSubmit, push, up, down }: Props) {
 
   return (
     <Box paddingLeft={2} marginTop={1}>
+      {sessionName && (
+        <Text dimColor>{`[${sessionName}] `}</Text>
+      )}
       <Text bold color="cyan">{'❯ '}</Text>
       <TextInput
         value={value}
