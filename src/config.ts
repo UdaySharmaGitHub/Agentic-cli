@@ -4,11 +4,18 @@
 
 import 'dotenv/config';
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import chalk from 'chalk';
 
 export const DEFAULT_MODEL = 'gpt-4.1-mini';
 export const DEFAULT_MAX_STEPS = 15;
-export const HISTORY_FILE = process.env.AGENT_HISTORY_FILE || 'chat_history.json';
+
+// Session storage — lives in home dir so it never ends up in the project repo
+export const AGENTIC_DIR = path.join(os.homedir(), '.agentic');
+export const SESSIONS_DIR = path.join(AGENTIC_DIR, 'sessions');
+export const SESSIONS_INDEX_FILE = path.join(AGENTIC_DIR, 'sessions.json');
+export const DEFAULT_SESSION = 'default';
 
 export interface AppConfig {
   apiKey: string;
