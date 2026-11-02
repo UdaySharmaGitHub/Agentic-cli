@@ -8,7 +8,7 @@ import {
   type AgentEvent,
 } from './events.js';
 import type { LogItem, LogItemInput } from './types.js';
-import type { ChatMessage } from '../memory.js';
+import { getMessages, clearMessages, loadHistory, saveHistory } from '../memory.js';
 import { runAgentTurn } from './agentRunner.js';
 import {
   setCurrentTask,
@@ -19,6 +19,16 @@ import {
 } from '../runbook.js';
 import { parseShellRunbook } from '../replay.js';
 import { executeTool } from '../tools/index.js';
+import {
+  createSession,
+  deleteSession,
+  renameSession,
+  loadIndex,
+  saveIndex,
+  incrementTurns,
+  getSessionDir,
+  initSessions,
+} from '../sessions.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { useHistory } from './hooks/useHistory.js';
 import { LogItemView } from './components/LogItemView.js';
@@ -31,12 +41,14 @@ interface Props {
   client: OpenAI;
   modelId: string;
   yolo: boolean;
+  sessionName: string;
+  sessionPath: string;
 }
 
 let _idCounter = 0;
 function nextId() { return String(++_idCounter); }
 
-export function App({ client, modelId, yolo }: Props) {
+export function App({ client, modelId, yolo, sessionName: initialSessionName, sessionPath: initialSessionPath }: Props) {
   const { exit } = useApp();
   const { columns } = useTerminalSize();
   const { push: historyPush, up: historyUp, down: historyDown } = useHistory();
@@ -46,9 +58,24 @@ export function App({ client, modelId, yolo }: Props) {
   const [thinking, setThinking] = useState(false);
   const [confirmReq, setConfirmReq] = useState<{ id: string; message: string } | null>(null);
   const [inputEnabled, setInputEnabled] = useState(true);
+  const [activeSession, setActiveSession] = useState(initialSessionName);
+  const [activeSessionPath, setActiveSessionPath] = useState(initialSessionPath);
 
-  const historyRef = useRef<ChatMessage[]>([]);
+  // historyRef.current points at the same array returned by getMessages(),
+  // so agentRunner's history.push() calls update the module-level state too.
+  const historyRef = useRef(getMessages());
   const confirmFnRef = useRef(yolo ? async () => true : makeConfirmFn());
+
+  // Flush history to disk on SIGINT/SIGTERM
+  useEffect(() => {
+    const flush = () => { void saveHistory(activeSessionPath); };
+    process.on('SIGINT', flush);
+    process.on('SIGTERM', flush);
+    return () => {
+      process.off('SIGINT', flush);
+      process.off('SIGTERM', flush);
+    };
+  }, [activeSessionPath]);
 
   const appendLog = useCallback((item: LogItemInput) => {
     setStaticLog(prev => [...prev, { ...item, id: nextId() } as LogItem]);
@@ -142,6 +169,24 @@ export function App({ client, modelId, yolo }: Props) {
         case 'replay:complete':
           appendLog({ kind: 'info', text: `✔ Replay complete — ${e.done}/${e.total} command(s) executed.`, variant: 'success' });
           break;
+
+        case 'session:switched':
+          appendLog({ kind: 'info', text: `✔ Switched to session "${e.name}" (${e.turns} turns)`, variant: 'success' });
+          break;
+
+        case 'session:list':
+          appendLog({ kind: 'info', text: '  Sessions:', variant: 'dim' });
+          for (const s of e.sessions) {
+            const marker = s.name === e.active ? '* ' : '  ';
+            appendLog({ kind: 'info', text: `  ${marker}${s.name}  (${s.turns} turns, last active ${new Date(s.lastActiveAt).toLocaleString()})`, variant: s.name === e.active ? 'success' : 'dim' });
+          }
+          break;
+
+        case 'session:info':
+          appendLog({ kind: 'info', text: `  Active session: ${e.name}`, variant: 'success' });
+          appendLog({ kind: 'info', text: `  Turns: ${e.turns}`, variant: 'dim' });
+          appendLog({ kind: 'info', text: `  Last active: ${new Date(e.lastActiveAt).toLocaleString()}`, variant: 'dim' });
+          break;
       }
     });
     return unsub;
@@ -159,13 +204,14 @@ export function App({ client, modelId, yolo }: Props) {
 
     // --- Slash commands (sync) ---
     if (trimmed === '/exit' || trimmed === '/quit') {
+      void saveHistory(activeSessionPath);
       exit();
       return;
     }
 
     if (trimmed === '/clear') {
       setStaticLog([]);
-      historyRef.current = [];
+      historyRef.current.length = 0;
       return;
     }
 
@@ -192,10 +238,17 @@ export function App({ client, modelId, yolo }: Props) {
         '    /help           — Show this help',
         '    /export [html|md|sh|both]  — Export session as runbook',
         '    /replay <file.sh>          — Replay a runbook step by step',
+        '    /session                   — Show active session info',
+        '    /session new <name>        — Create and switch to new session',
+        '    /session switch <name>     — Switch to existing session',
+        '    /session rename <name>     — Rename active session',
+        '    /session list              — List all sessions',
+        '    /session delete <name>     — Delete a session',
       ]) appendLog({ kind: 'info', text: c, variant: 'dim' });
       appendLog({ kind: 'info', text: '', variant: 'dim' });
       appendLog({ kind: 'info', text: '  Flags:', variant: 'dim' });
-      appendLog({ kind: 'info', text: '    --yolo          — Auto-approve all actions', variant: 'dim' });
+      appendLog({ kind: 'info', text: '    --yolo              — Auto-approve all actions', variant: 'dim' });
+      appendLog({ kind: 'info', text: '    --session <name>    — Start in named session', variant: 'dim' });
       appendLog({ kind: 'info', text: '', variant: 'dim' });
       return;
     }
@@ -203,6 +256,147 @@ export function App({ client, modelId, yolo }: Props) {
     if (trimmed === '/status') {
       appendLog({ kind: 'info', text: `  Model:    ${modelId}`, variant: 'dim' });
       appendLog({ kind: 'info', text: `  History:  ${historyRef.current.length} messages`, variant: 'dim' });
+      appendLog({ kind: 'info', text: `  Session:  ${activeSession}`, variant: 'dim' });
+      return;
+    }
+
+    // --- Session commands (async) ---
+    if (trimmed === '/session' || trimmed.startsWith('/session ')) {
+      const parts = trimmed.split(/\s+/);
+      const sub = parts[1];
+
+      if (!sub) {
+        // bare /session — show info
+        setInputEnabled(false);
+        (async () => {
+          try {
+            const index = await loadIndex();
+            const entry = index.sessions.find(s => s.name === activeSession);
+            emit({ type: 'session:info', name: activeSession, turns: entry?.turns ?? 0, lastActiveAt: entry?.lastActiveAt ?? new Date().toISOString() });
+          } finally {
+            setInputEnabled(true);
+          }
+        })();
+        return;
+      }
+
+      if (sub === 'list') {
+        setInputEnabled(false);
+        (async () => {
+          try {
+            const index = await loadIndex();
+            emit({ type: 'session:list', sessions: index.sessions, active: activeSession });
+          } finally {
+            setInputEnabled(true);
+          }
+        })();
+        return;
+      }
+
+      if (sub === 'new') {
+        const name = parts[2];
+        if (!name) {
+          appendLog({ kind: 'info', text: '  Usage: /session new <name>', variant: 'warning' });
+          return;
+        }
+        setInputEnabled(false);
+        (async () => {
+          try {
+            await saveHistory(activeSessionPath);
+            await createSession(name);
+            const newPath = getSessionDir(name);
+            clearMessages();
+            historyRef.current = getMessages();
+            setActiveSession(name);
+            setActiveSessionPath(newPath);
+            const index = await loadIndex();
+            index.active = name;
+            await saveIndex(index);
+            emit({ type: 'session:switched', name, turns: 0 });
+          } catch (err) {
+            emit({ type: 'info', text: `❌ ${err instanceof Error ? err.message : String(err)}`, variant: 'error' });
+          } finally {
+            setInputEnabled(true);
+          }
+        })();
+        return;
+      }
+
+      if (sub === 'switch') {
+        const name = parts[2];
+        if (!name) {
+          appendLog({ kind: 'info', text: '  Usage: /session switch <name>', variant: 'warning' });
+          return;
+        }
+        setInputEnabled(false);
+        (async () => {
+          try {
+            const index = await loadIndex();
+            const entry = index.sessions.find(s => s.name === name);
+            if (!entry) throw new Error(`Session "${name}" not found. Use /session new <name> to create it.`);
+            await saveHistory(activeSessionPath);
+            const newPath = getSessionDir(name);
+            clearMessages();
+            await loadHistory(newPath);
+            historyRef.current = getMessages();
+            index.active = name;
+            entry.lastActiveAt = new Date().toISOString();
+            await saveIndex(index);
+            setActiveSession(name);
+            setActiveSessionPath(newPath);
+            emit({ type: 'session:switched', name, turns: entry.turns });
+          } catch (err) {
+            emit({ type: 'info', text: `❌ ${err instanceof Error ? err.message : String(err)}`, variant: 'error' });
+          } finally {
+            setInputEnabled(true);
+          }
+        })();
+        return;
+      }
+
+      if (sub === 'rename') {
+        const name = parts[2];
+        if (!name) {
+          appendLog({ kind: 'info', text: '  Usage: /session rename <new-name>', variant: 'warning' });
+          return;
+        }
+        setInputEnabled(false);
+        (async () => {
+          try {
+            await renameSession(activeSession, name);
+            setActiveSession(name);
+            setActiveSessionPath(getSessionDir(name));
+            appendLog({ kind: 'info', text: `✔ Session renamed to "${name}"`, variant: 'success' });
+          } catch (err) {
+            emit({ type: 'info', text: `❌ ${err instanceof Error ? err.message : String(err)}`, variant: 'error' });
+          } finally {
+            setInputEnabled(true);
+          }
+        })();
+        return;
+      }
+
+      if (sub === 'delete') {
+        const name = parts[2];
+        if (!name) {
+          appendLog({ kind: 'info', text: '  Usage: /session delete <name>', variant: 'warning' });
+          return;
+        }
+        setInputEnabled(false);
+        (async () => {
+          try {
+            await deleteSession(name, activeSession);
+            appendLog({ kind: 'info', text: `✔ Session "${name}" deleted.`, variant: 'success' });
+          } catch (err) {
+            emit({ type: 'info', text: `❌ ${err instanceof Error ? err.message : String(err)}`, variant: 'error' });
+          } finally {
+            setInputEnabled(true);
+          }
+        })();
+        return;
+      }
+
+      appendLog({ kind: 'info', text: `  Unknown subcommand: ${sub}. Try /help.`, variant: 'warning' });
       return;
     }
 
@@ -277,12 +471,15 @@ export function App({ client, modelId, yolo }: Props) {
     setCurrentTask(trimmed);
     historyRef.current.push({ role: 'user', content: trimmed });
 
-    runAgentTurn(client, modelId, historyRef.current, confirmFnRef.current).finally(() => {
+    runAgentTurn(client, modelId, historyRef.current, confirmFnRef.current).then(async () => {
+      await incrementTurns(activeSession);
+      await saveHistory(activeSessionPath);
+    }).finally(() => {
       setThinking(false);
       setStreaming(null);
       setInputEnabled(true);
     });
-  }, [inputEnabled, appendLog, client, modelId, exit]);
+  }, [inputEnabled, appendLog, client, modelId, exit, activeSession, activeSessionPath]);
 
   if (columns < 40) return <NarrowWarning />;
 
@@ -309,7 +506,13 @@ export function App({ client, modelId, yolo }: Props) {
         />
       )}
       {inputEnabled && !confirmReq && (
-        <InputBar onSubmit={handleSubmit} push={historyPush} up={historyUp} down={historyDown} />
+        <InputBar
+          onSubmit={handleSubmit}
+          push={historyPush}
+          up={historyUp}
+          down={historyDown}
+          sessionName={activeSession}
+        />
       )}
     </Box>
   );
