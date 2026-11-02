@@ -474,6 +474,8 @@ export function App({ client, modelId, yolo, sessionName: initialSessionName, se
     runAgentTurn(client, modelId, historyRef.current, confirmFnRef.current).then(async () => {
       await incrementTurns(activeSession);
       await saveHistory(activeSessionPath);
+    }).catch((err) => {
+      emit({ type: 'info', text: `❌ Failed to save session: ${err instanceof Error ? err.message : String(err)}`, variant: 'error' });
     }).finally(() => {
       setThinking(false);
       setStreaming(null);

@@ -32,7 +32,7 @@ export function pushMessage(msg: ChatMessage): void {
 }
 
 export function clearMessages(): void {
-  messages = [];
+  messages.length = 0;
 }
 
 export function messageCount(): number {
@@ -44,9 +44,11 @@ export async function loadHistory(sessionPath: string): Promise<void> {
   try {
     const file = path.join(sessionPath, 'chat_history.json');
     const data = await fs.readFile(file, 'utf-8');
-    messages = JSON.parse(data) as ChatMessage[];
+    const loaded = JSON.parse(data) as ChatMessage[];
+    messages.length = 0;
+    messages.push(...loaded);
   } catch {
-    messages = [];
+    messages.length = 0;
   }
 }
 

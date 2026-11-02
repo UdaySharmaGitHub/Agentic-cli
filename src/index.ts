@@ -428,8 +428,12 @@ async function main() {
     }
 
     // Persist after each turn
-    await incrementTurns(activeSession);
-    await saveHistory(activeSessionPath);
+    try {
+      await incrementTurns(activeSession);
+      await saveHistory(activeSessionPath);
+    } catch (err) {
+      printAgentError(err instanceof Error ? err.message : String(err));
+    }
 
     const last = getLastTurn();
     if (last) {

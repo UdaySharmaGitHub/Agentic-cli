@@ -83,4 +83,32 @@ describe('memory persistence', () => {
       await fs.rm(sessionB, { recursive: true, force: true });
     }
   });
+
+  it('a reference held from getMessages() stays valid across clearMessages and loadHistory', async () => {
+    // Simulate the REPL: bind the array reference once, like `const history = getMessages()`.
+    const held = getMessages();
+    held.push({ role: 'user', content: 'session A msg' });
+    await saveHistory(tmpDir); // tmpDir = session A path (see existing beforeEach)
+
+    // Switch away: clear + load a different session via the SAME held reference.
+    clearMessages();
+    expect(held).toHaveLength(0); // in-place truncation keeps `held` valid
+
+    // Load an empty/other session; held must reflect it.
+    const other = path.join(os.tmpdir(), `held-ref-${Date.now()}`);
+    await fs.mkdir(other, { recursive: true });
+    try {
+      await fs.writeFile(path.join(other, 'chat_history.json'), JSON.stringify([{ role: 'user', content: 'session B msg' }]), 'utf-8');
+      await loadHistory(other);
+      expect(held).toHaveLength(1);
+      expect(held[0]).toMatchObject({ content: 'session B msg' });
+      // And a push through the held ref must land in the module array that saveHistory serializes.
+      held.push({ role: 'assistant', content: 'reply in B' });
+      await saveHistory(other);
+      const onDisk = JSON.parse(await fs.readFile(path.join(other, 'chat_history.json'), 'utf-8')) as unknown[];
+      expect(onDisk).toHaveLength(2);
+    } finally {
+      await fs.rm(other, { recursive: true, force: true });
+    }
+  });
 });
