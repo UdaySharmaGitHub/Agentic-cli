@@ -15,6 +15,12 @@ export interface SessionsIndex {
   sessions: SessionEntry[];
 }
 
+function validateSessionName(name: string): void {
+  if (!name || name === '.' || name === '..' || name !== path.basename(name)) {
+    throw new Error(`Invalid session name: "${name}". Use a plain name without path separators.`);
+  }
+}
+
 export function getSessionDir(name: string): string {
   return path.join(SESSIONS_DIR, name);
 }
@@ -24,11 +30,18 @@ export function getHistoryPath(name: string): string {
 }
 
 export async function loadIndex(): Promise<SessionsIndex> {
+  let data: string;
   try {
-    const data = await fs.readFile(SESSIONS_INDEX_FILE, 'utf-8');
-    return JSON.parse(data) as SessionsIndex;
+    data = await fs.readFile(SESSIONS_INDEX_FILE, 'utf-8');
   } catch {
     return { active: DEFAULT_SESSION, sessions: [] };
+  }
+  try {
+    return JSON.parse(data) as SessionsIndex;
+  } catch (err) {
+    throw new Error(
+      `Corrupt sessions index at ${SESSIONS_INDEX_FILE}: ${err instanceof Error ? err.message : String(err)}. Fix or remove the file.`,
+    );
   }
 }
 
@@ -47,7 +60,9 @@ export async function initSessions(requested?: string): Promise<{ name: string; 
   await fs.mkdir(SESSIONS_DIR, { recursive: true });
   const index = await loadIndex();
 
-  const targetName = requested ?? index.active ?? DEFAULT_SESSION;
+  const targetName = requested ?? index.active;
+
+  validateSessionName(targetName);
 
   if (!index.sessions.find(s => s.name === targetName)) {
     const now = new Date().toISOString();
@@ -62,6 +77,7 @@ export async function initSessions(requested?: string): Promise<{ name: string; 
 }
 
 export async function createSession(name: string): Promise<void> {
+  validateSessionName(name);
   const index = await loadIndex();
   if (index.sessions.find(s => s.name === name)) {
     throw new Error(`Session "${name}" already exists`);
@@ -73,6 +89,7 @@ export async function createSession(name: string): Promise<void> {
 }
 
 export async function deleteSession(name: string, active: string): Promise<void> {
+  validateSessionName(name);
   if (name === active) {
     throw new Error('Cannot delete the active session. Switch to another session first.');
   }
@@ -85,6 +102,8 @@ export async function deleteSession(name: string, active: string): Promise<void>
 }
 
 export async function renameSession(oldName: string, newName: string): Promise<void> {
+  validateSessionName(oldName);
+  validateSessionName(newName);
   const index = await loadIndex();
   const entry = index.sessions.find(s => s.name === oldName);
   if (!entry) throw new Error(`Session "${oldName}" not found`);
