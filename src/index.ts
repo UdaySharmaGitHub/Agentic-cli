@@ -3,7 +3,6 @@ import "dotenv/config";
 import { createInterface } from "node:readline";
 import { executeTool } from "./tools/index.js";
 import type { ConfirmFn } from "./tools/types.js";
-import type { ChatMessage } from "./memory.js";
 import { createClient, streamMessage } from "./openai.js";
 import { DEFAULT_MODEL } from "./config.js";
 import {
@@ -41,6 +40,22 @@ import {
 } from "./runbook.js";
 import { parseShellRunbook } from "./replay.js";
 import { recordUsage, getLastTurn, getSession, resetTokens } from "./tokens.js";
+import {
+  loadHistory,
+  saveHistory,
+  getMessages,
+  clearMessages,
+} from "./memory.js";
+import {
+  initSessions,
+  createSession,
+  deleteSession,
+  renameSession,
+  loadIndex,
+  saveIndex,
+  incrementTurns,
+  getSessionDir,
+} from "./sessions.js";
 
 async function main() {
   // Launch Ink TUI when running in a real terminal; fall back to chalk for pipes/CI.
@@ -60,10 +75,27 @@ async function main() {
   const yolo = process.argv.includes("--yolo");
   const modelId = DEFAULT_MODEL;
 
-  const client = createClient(modelId);
-  const history: ChatMessage[] = [];
+  // Parse --session <name>
+  const sessionArgIdx = process.argv.indexOf("--session");
+  const requestedSession = sessionArgIdx !== -1 ? process.argv[sessionArgIdx + 1] : undefined;
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " });
+  const { name: sessionName, path: sessionPath } = await initSessions(requestedSession);
+  await loadHistory(sessionPath);
+
+  // After every turn and on exit, persist history
+  const flush = () => { void saveHistory(sessionPath); };
+  process.on("SIGINT", flush);
+  process.on("SIGTERM", flush);
+
+  const client = createClient(modelId);
+  // history is the same array reference held by the memory module
+  const history = getMessages();
+
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: `[${sessionName}] > `,
+  });
 
   // Pending confirmation: set when a tool asks for approval,
   // resolved by the next line event (avoids rl.question() state conflicts).
@@ -85,6 +117,10 @@ async function main() {
   initSession(modelId);
   rl.prompt();
 
+  // Keep prompt in sync after session switches
+  let activeSession = sessionName;
+  let activeSessionPath = sessionPath;
+
   rl.on("line", async (line) => {
     const input = line.trim();
 
@@ -96,7 +132,7 @@ async function main() {
 
     if (!input) { rl.prompt(); return; }
 
-    if (input === "/exit" || input === "/quit") { process.exit(0); }
+    if (input === "/exit" || input === "/quit") { await saveHistory(activeSessionPath); process.exit(0); }
     if (input === "/clear") { history.length = 0; resetTokens(); console.clear(); rl.prompt(); return; }
     if (input === "/help") { printHelp(); rl.prompt(); return; }
     if (input === "/status") {
@@ -106,6 +142,114 @@ async function main() {
         ? { lastPrompt: last.promptTokens, sessionTotal: sess.totalTokens }
         : undefined,
       );
+      console.log(`  Session:  ${activeSession}`);
+      rl.prompt();
+      return;
+    }
+
+    // --- Session commands ---
+    if (input === "/session" || input.startsWith("/session ")) {
+      const parts = input.split(/\s+/);
+      const sub = parts[1];
+
+      if (!sub) {
+        const index = await loadIndex();
+        const entry = index.sessions.find(s => s.name === activeSession);
+        console.log(`  Active session: ${activeSession}`);
+        console.log(`  Turns: ${entry?.turns ?? 0}`);
+        console.log(`  Last active: ${entry ? new Date(entry.lastActiveAt).toLocaleString() : 'now'}`);
+        rl.prompt();
+        return;
+      }
+
+      if (sub === "list") {
+        const index = await loadIndex();
+        console.log("  Sessions:");
+        for (const s of index.sessions) {
+          const marker = s.name === activeSession ? "* " : "  ";
+          console.log(`  ${marker}${s.name}  (${s.turns} turns, last active ${new Date(s.lastActiveAt).toLocaleString()})`);
+        }
+        rl.prompt();
+        return;
+      }
+
+      if (sub === "new") {
+        const name = parts[2];
+        if (!name) { console.log("  Usage: /session new <name>"); rl.prompt(); return; }
+        try {
+          await saveHistory(activeSessionPath);
+          await createSession(name);
+          const newPath = getSessionDir(name);
+          clearMessages();
+          const index = await loadIndex();
+          index.active = name;
+          await saveIndex(index);
+          activeSession = name;
+          activeSessionPath = newPath;
+          rl.setPrompt(`[${activeSession}] > `);
+          console.log(`  ✔ Created and switched to session "${name}"`);
+        } catch (err) {
+          console.log(`  ❌ ${err instanceof Error ? err.message : String(err)}`);
+        }
+        rl.prompt();
+        return;
+      }
+
+      if (sub === "switch") {
+        const name = parts[2];
+        if (!name) { console.log("  Usage: /session switch <name>"); rl.prompt(); return; }
+        try {
+          const index = await loadIndex();
+          const entry = index.sessions.find(s => s.name === name);
+          if (!entry) throw new Error(`Session "${name}" not found. Use /session new <name> to create it.`);
+          await saveHistory(activeSessionPath);
+          const newPath = getSessionDir(name);
+          clearMessages();
+          await loadHistory(newPath);
+          index.active = name;
+          entry.lastActiveAt = new Date().toISOString();
+          await saveIndex(index);
+          activeSession = name;
+          activeSessionPath = newPath;
+          rl.setPrompt(`[${activeSession}] > `);
+          console.log(`  ✔ Switched to session "${name}" (${entry.turns} turns)`);
+        } catch (err) {
+          console.log(`  ❌ ${err instanceof Error ? err.message : String(err)}`);
+        }
+        rl.prompt();
+        return;
+      }
+
+      if (sub === "rename") {
+        const name = parts[2];
+        if (!name) { console.log("  Usage: /session rename <new-name>"); rl.prompt(); return; }
+        try {
+          await renameSession(activeSession, name);
+          activeSession = name;
+          activeSessionPath = getSessionDir(name);
+          rl.setPrompt(`[${activeSession}] > `);
+          console.log(`  ✔ Session renamed to "${name}"`);
+        } catch (err) {
+          console.log(`  ❌ ${err instanceof Error ? err.message : String(err)}`);
+        }
+        rl.prompt();
+        return;
+      }
+
+      if (sub === "delete") {
+        const name = parts[2];
+        if (!name) { console.log("  Usage: /session delete <name>"); rl.prompt(); return; }
+        try {
+          await deleteSession(name, activeSession);
+          console.log(`  ✔ Session "${name}" deleted.`);
+        } catch (err) {
+          console.log(`  ❌ ${err instanceof Error ? err.message : String(err)}`);
+        }
+        rl.prompt();
+        return;
+      }
+
+      console.log(`  Unknown subcommand: ${sub}. Try /help.`);
       rl.prompt();
       return;
     }
@@ -121,10 +265,10 @@ async function main() {
       const recentMessages = history.slice(history.length - KEEP_LAST);
       const compactSpinner = createSpinner("Summarising context...").start();
       try {
-        const summaryMessages: ChatMessage[] = [
+        const summaryMessages = [
           ...oldMessages,
           {
-            role: "user",
+            role: "user" as const,
             content:
               "Provide a dense, structured summary of our conversation so far. Include: tasks attempted, tools used, files created/modified, commands run and their outcomes, key decisions, and any context needed to continue seamlessly. Be specific — include file names, command outputs, and concrete results.",
           },
@@ -132,13 +276,13 @@ async function main() {
         const summaryResponse = await streamMessage(client, modelId, "", summaryMessages, () => {});
         compactSpinner.stop();
         if (summaryResponse.usage) recordUsage(summaryResponse.usage);
-        const newHistory: ChatMessage[] = [
+        const newHistory = [
           {
-            role: "user",
+            role: "user" as const,
             content: `[COMPACTED — ${oldMessages.length} prior messages summarised]\n\n${summaryResponse.text}`,
           },
           {
-            role: "assistant",
+            role: "assistant" as const,
             content: "Understood. I have full context from the summarised history and am ready to continue.",
           },
           ...recentMessages,
@@ -194,6 +338,12 @@ async function main() {
           if (!approved) { printRejected(); continue; }
           const result = await executeTool("run_command", { command: step.command }, confirm);
           printToolResult("run_command", result.output);
+          recordStep({
+            reasoning: step.reasoning,
+            toolName: "run_command",
+            toolArgs: { command: step.command },
+            toolResult: result.output,
+          });
           done++;
         }
         printReplayComplete(done, runbook.steps.length);
@@ -229,10 +379,8 @@ async function main() {
         if (!textStarted) spinner.stop();
         if (textStarted) console.log();
 
-        // Track token usage from every API call
         if (response.usage) recordUsage(response.usage);
 
-        // Add assistant message to history
         if (response.toolCalls.length > 0) {
           history.push({
             role: "assistant",
@@ -279,6 +427,10 @@ async function main() {
       printAgentError(err instanceof Error ? err.message : String(err));
     }
 
+    // Persist after each turn
+    await incrementTurns(activeSession);
+    await saveHistory(activeSessionPath);
+
     const last = getLastTurn();
     if (last) {
       printTokenLine(last.promptTokens, getSession().totalTokens);
@@ -287,7 +439,10 @@ async function main() {
     rl.prompt();
   });
 
-  rl.on("close", () => process.exit(0));
+  rl.on("close", async () => {
+    await saveHistory(activeSessionPath);
+    process.exit(0);
+  });
 }
 
 main();
