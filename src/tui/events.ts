@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import type { ConfirmFn } from '../tools/types.js';
+import type { SessionEntry } from '../sessions.js';
 
 export type AgentEvent =
   | { type: 'agent:thinking' }
@@ -22,7 +23,10 @@ export type AgentEvent =
   | { type: 'export:empty' }
   | { type: 'replay:header'; task: string; count: number }
   | { type: 'replay:step'; current: number; total: number; reasoning: string; command: string }
-  | { type: 'replay:complete'; done: number; total: number };
+  | { type: 'replay:complete'; done: number; total: number }
+  | { type: 'session:switched'; name: string; turns: number }
+  | { type: 'session:list'; sessions: SessionEntry[]; active: string }
+  | { type: 'session:info'; name: string; turns: number; lastActiveAt: string };
 
 const _bus = new EventEmitter();
 _bus.setMaxListeners(50);
