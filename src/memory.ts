@@ -3,8 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import fs from 'node:fs/promises';
-import chalk from 'chalk';
-import { HISTORY_FILE } from './config.js';
+import path from 'node:path';
 
 // ── OpenAI-compatible message types ──────────────────────────────────────────
 
@@ -33,27 +32,32 @@ export function pushMessage(msg: ChatMessage): void {
 }
 
 export function clearMessages(): void {
-  messages = [];
+  messages.length = 0;
 }
 
 export function messageCount(): number {
   return messages.length;
 }
 
-export async function loadHistory(): Promise<void> {
+/** Load history from <sessionPath>/chat_history.json into module-level messages. */
+export async function loadHistory(sessionPath: string): Promise<void> {
   try {
-    const data = await fs.readFile(HISTORY_FILE, 'utf-8');
-    messages = JSON.parse(data);
-    console.log(chalk.cyan(`  📂 Loaded ${messages.length} messages from ${HISTORY_FILE}`));
+    const file = path.join(sessionPath, 'chat_history.json');
+    const data = await fs.readFile(file, 'utf-8');
+    const loaded = JSON.parse(data) as ChatMessage[];
+    messages.length = 0;
+    messages.push(...loaded);
   } catch {
-    messages = [];
-    console.log(chalk.cyan('  🆕 Starting fresh conversation.'));
+    messages.length = 0;
   }
 }
 
-export async function saveHistory(): Promise<void> {
+/** Persist module-level messages to <sessionPath>/chat_history.json. */
+export async function saveHistory(sessionPath: string): Promise<void> {
   try {
-    await fs.writeFile(HISTORY_FILE, JSON.stringify(messages, null, 2), 'utf-8');
+    const file = path.join(sessionPath, 'chat_history.json');
+    await fs.mkdir(sessionPath, { recursive: true });
+    await fs.writeFile(file, JSON.stringify(messages, null, 2), 'utf-8');
   } catch {
     // Silently fail — history is not critical
   }

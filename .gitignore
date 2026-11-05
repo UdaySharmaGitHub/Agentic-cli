@@ -14,6 +14,11 @@ dist/
 chat_history.json
 *.log
 
+# Named sessions are stored under ~/.agentic/sessions/ (the user's home dir,
+# outside the project root). This entry is a safety net in case the CLI is
+# ever run with HOME pointed at the repo.
+.agentic/
+
 # IDE / OS metadata
 .vscode/
 .idea/
