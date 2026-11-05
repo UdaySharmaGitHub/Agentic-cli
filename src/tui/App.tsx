@@ -27,7 +27,6 @@ import {
   saveIndex,
   incrementTurns,
   getSessionDir,
-  initSessions,
 } from '../sessions.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { useHistory } from './hooks/useHistory.js';
@@ -385,6 +384,11 @@ export function App({ client, modelId, yolo, sessionName: initialSessionName, se
         setInputEnabled(false);
         (async () => {
           try {
+            const confirmed = await confirmFnRef.current(`Delete session "${name}"? This cannot be undone.`);
+            if (!confirmed) {
+              appendLog({ kind: 'info', text: '  Cancelled.', variant: 'dim' });
+              return;
+            }
             await deleteSession(name, activeSession);
             appendLog({ kind: 'info', text: `✔ Session "${name}" deleted.`, variant: 'success' });
           } catch (err) {

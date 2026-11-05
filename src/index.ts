@@ -240,6 +240,8 @@ async function main() {
         const name = parts[2];
         if (!name) { console.log("  Usage: /session delete <name>"); rl.prompt(); return; }
         try {
+          const confirmed = await confirm(`Delete session "${name}"? This cannot be undone.`);
+          if (!confirmed) { console.log("  Cancelled."); rl.prompt(); return; }
           await deleteSession(name, activeSession);
           console.log(`  ✔ Session "${name}" deleted.`);
         } catch (err) {
