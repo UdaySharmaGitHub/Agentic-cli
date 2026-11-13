@@ -8,12 +8,18 @@ The project currently has no tests (`"test": "echo \"No tests yet\" && exit 0"`)
 
 ```
 tests/
+├── smoke.test.ts                        ← top-level sanity check
+├── memory.test.ts                       ← file-based persistence (session-aware)
+├── sessions.test.ts                     ← session lifecycle (create/delete/rename/…)
 ├── unit/
 │   ├── safety.test.ts
-│   ├── memory.test.ts
+│   ├── memory.test.ts                   ← in-memory state (pure, no I/O)
 │   ├── config.test.ts
 │   ├── runbook.test.ts
 │   ├── replay.test.ts
+│   ├── openai.test.ts
+│   ├── prompts.test.ts
+│   ├── tokens.test.ts
 │   ├── tools/
 │   │   ├── readFile.test.ts
 │   │   ├── writeFile.test.ts
@@ -23,8 +29,10 @@ tests/
 │   │   ├── runCommand.test.ts
 │   │   ├── searchFiles.test.ts
 │   │   ├── webSearch.test.ts
+│   │   ├── helpers.test.ts
 │   │   └── registry.test.ts
 │   └── tui/
+│       ├── events.test.ts
 │       └── hooks/
 │           ├── useHistory.test.ts
 │           └── useTerminalSize.test.ts
@@ -69,7 +77,7 @@ tests/unit/safety.test.ts
 
 ---
 
-### 2. `src/memory.ts`
+### 2. `src/memory.ts` — in-memory state
 
 Pure in-memory state — no I/O in hot path.
 
@@ -83,6 +91,21 @@ tests/unit/memory.test.ts
 - [ ] `messageCount` returns correct count after pushes and clear
 - [ ] Handles all three `ChatMessage` roles: `user`, `assistant` (with `tool_calls`), `tool`
 
+### 2b. `src/memory.ts` — file-based persistence (session-aware)
+
+The same `memory.ts` module also exposes `saveHistory(sessionPath)` and `loadHistory(sessionPath)` for persisting chat history per session. These need a separate test file that uses the real filesystem via `os.tmpdir()`.
+
+```
+tests/memory.test.ts
+```
+
+- [ ] `saveHistory` writes current messages as JSON to `<sessionPath>/chat_history.json`
+- [ ] `loadHistory` reads messages back and populates the in-memory store
+- [ ] `loadHistory` on a missing file starts with empty history (no crash)
+- [ ] `save → load` round-trip preserves all messages exactly
+- [ ] History is isolated between different session paths (session A does not bleed into session B)
+- [ ] A reference held from `getMessages()` stays valid across `clearMessages` + `loadHistory` (in-place splice, not array replacement)
+
 ---
 
 ### 3. `src/config.ts`
@@ -91,9 +114,14 @@ tests/unit/memory.test.ts
 tests/unit/config.test.ts
 ```
 
-- [ ] Exported constants (`HISTORY_FILE`, `DEFAULT_MODEL`, `DEFAULT_MAX_STEPS`) resolve to the expected values
-- [ ] `DEFAULT_MODEL` falls back to `'gpt-4.1-mini'` when no env override is set
-- [ ] `HISTORY_FILE` respects the `AGENT_HISTORY_FILE` env override
+- [ ] `DEFAULT_MODEL` is `'gpt-4.1-mini'`
+- [ ] `DEFAULT_MAX_STEPS` resolves to the expected numeric value
+- [ ] `AGENTIC_DIR` is a non-empty string nested under the user home directory
+- [ ] `SESSIONS_DIR` is nested inside `AGENTIC_DIR`
+- [ ] `SESSIONS_INDEX_FILE` is inside `AGENTIC_DIR`
+- [ ] `DEFAULT_SESSION` is `'default'`
+- [ ] `loadKnowledgeBase(path)` returns `{ content, file }` when the file exists
+- [ ] `loadKnowledgeBase(path)` returns `null` when the file does not exist
 
 ---
 
@@ -125,7 +153,86 @@ tests/unit/replay.test.ts
 
 ---
 
-### 6. `src/tools/` — individual tool modules
+### 6. `src/sessions.ts`
+
+Session management — creates, persists, and switches named sessions. Each session gets its own subdirectory under `~/.agentic/sessions/` and an entry in the `sessions.json` index.
+
+```
+tests/sessions.test.ts
+```
+
+Use `vi.hoisted` + `vi.mock('../src/config.js', ...)` to redirect `AGENTIC_DIR`, `SESSIONS_DIR`, and `SESSIONS_INDEX_FILE` to a unique `os.tmpdir()` path so tests never touch the real home directory.
+
+- [ ] `getSessionDir(name)` returns a path nested under `SESSIONS_DIR`
+- [ ] `getHistoryPath(name)` returns a path ending in `<name>/chat_history.json`
+- [ ] `saveIndex` / `loadIndex` round-trip: write an index, read it back, assert equality
+- [ ] `loadIndex` on a corrupt JSON file throws a descriptive `"Corrupt sessions index"` error
+- [ ] `initSessions()` with no argument creates a `default` session, sets it active, and creates its directory
+- [ ] `initSessions("foo")` creates and activates a named session
+- [ ] Re-running `initSessions("foo")` when `foo` already exists does not duplicate the index entry
+- [ ] `createSession("bar")` adds it to the index and creates its directory
+- [ ] `createSession` with a duplicate name throws `'Session "bar" already exists'`
+- [ ] `createSession("../evil")` throws `'Invalid session name'` (path-traversal guard)
+- [ ] `deleteSession` throws `'Cannot delete the active session'` when asked to delete the active one
+- [ ] `deleteSession` removes a non-active session from the index and deletes its directory
+- [ ] `deleteSession` on an unknown name throws `'Session "ghost" not found'`
+- [ ] `renameSession` renames the directory and updates the index entry
+- [ ] `renameSession` updates `index.active` when the active session is renamed
+- [ ] `renameSession` on an unknown `oldName` throws
+- [ ] `renameSession` to an already-existing `newName` throws
+- [ ] `updateLastActive` updates `lastActiveAt` for an existing session
+- [ ] `updateLastActive` is a no-op (no crash) for an unknown session name
+- [ ] `incrementTurns` increases the `turns` counter by 1
+- [ ] `incrementTurns` is a no-op (no crash) for an unknown session name
+- [ ] `index.active` pointer is correct after creating multiple sessions and manually switching
+
+---
+
+### 7. `src/tokens.ts`
+
+Pure accumulator — no I/O, no side effects outside module state.
+
+```
+tests/unit/tokens.test.ts
+```
+
+- [ ] `recordUsage` accumulates `promptTokens` and `completionTokens` across multiple calls
+- [ ] `getLastTurn` returns the most recently recorded `TurnUsage` object
+- [ ] `getLastTurn` returns `null` before any usage is recorded
+- [ ] `getSession` returns the summed totals across all recorded turns
+- [ ] `resetTokens` clears all accumulated state; `getSession` returns zeros and `getLastTurn` returns `null`
+
+---
+
+### 8. `src/openai.ts`
+
+Wrapper around the OpenAI SDK — mock the `openai` module entirely so no real API calls are made.
+
+```
+tests/unit/openai.test.ts
+```
+
+- [ ] `createClient` returns an `OpenAI` instance (constructor called once)
+- [ ] `streamMessage` returns `{ text, toolCalls, usage }` on a normal text response
+- [ ] `streamMessage` correctly parses tool-call chunks and returns populated `toolCalls`
+- [ ] `streamMessage` records token usage via `recordUsage` when the API returns a `usage` object
+- [ ] `streamMessage` propagates API errors (rejects with the original error)
+
+---
+
+### 9. `src/prompts.ts`
+
+```
+tests/unit/prompts.test.ts
+```
+
+- [ ] The system prompt string is non-empty
+- [ ] `buildSystemPrompt` (or equivalent export) includes expected sections (tool descriptions, safety rules, etc.)
+- [ ] Injecting a knowledge-base string appends it to the prompt
+
+---
+
+### 10. `src/tools/` — individual tool modules
 
 Each tool module exports a `definition` (schema) and an `execute` function.
 
@@ -189,6 +296,13 @@ tests/unit/tools/webSearch.test.ts
 - [ ] Parses a mocked response into the expected `ToolResult` format
 - [ ] Returns `isError: true` on network failure
 
+#### Tool helpers (`src/tools/helpers.ts`)
+```
+tests/unit/tools/helpers.test.ts
+```
+- [ ] Helper utilities (e.g. argument coercion, output formatting) produce the expected output for known inputs
+- [ ] Edge cases (empty input, null values) do not throw
+
 #### Tool registry (`src/tools/index.ts`)
 ```
 tests/unit/tools/registry.test.ts
@@ -199,21 +313,33 @@ tests/unit/tools/registry.test.ts
 
 ---
 
-### 7. TUI Hooks — `src/tui/hooks/`
+### 11. TUI — `src/tui/hooks/` and `src/tui/events.ts`
 
 ```
 tests/unit/tui/hooks/useHistory.test.ts
 tests/unit/tui/hooks/useTerminalSize.test.ts
+tests/unit/tui/events.test.ts
 ```
 
-- [ ] `useHistory` — `push(entry)` deduplicates and prepends; `up()` walks back through history; `down()` walks forward; returns `null` at the boundaries
+- [ ] `useHistory` — `push(entry)` deduplicates and moves entry to front; `up()` walks back through history; `down()` walks forward; returns `null` at the boundaries; whitespace-only entries are ignored; `maxEntries` limit is respected
 - [ ] `useTerminalSize` — returns sensible defaults when `process.stdout` columns/rows are unavailable
+- [ ] `events.ts` — event emitter helpers fire callbacks correctly and clean up listeners on teardown
+
+---
+
+### 12. Smoke test
+
+```
+tests/smoke.test.ts
+```
+
+- [ ] A single top-level import of the project's public entry point does not throw at module load time
 
 ---
 
 ## Integration Tests
 
-### 8. Agent ReAct Loop — `src/agent.ts`
+### 13. Agent ReAct Loop — `src/agent.ts`
 
 ```
 tests/integration/agent.test.ts
@@ -230,7 +356,7 @@ Stub the OpenAI client (`streamMessage`) so no real API calls are made.
 
 ---
 
-### 9. Runbook Export → Replay Round-trip
+### 14. Runbook Export → Replay Round-trip
 
 ```
 tests/integration/runbook-replay.test.ts
@@ -241,7 +367,7 @@ tests/integration/runbook-replay.test.ts
 
 ---
 
-### 10. TUI — `src/tui/` (ink-testing-library)
+### 15. TUI — `src/tui/` (ink-testing-library)
 
 ```
 tests/integration/tui/agentRunner.test.tsx
@@ -257,7 +383,7 @@ tests/integration/tui/agentRunner.test.tsx
 ## Acceptance Criteria
 
 - [ ] `pnpm test` runs the full suite and exits 0
-- [ ] `pnpm test:coverage` produces a coverage report
+- [ ] `pnpm test:coverage` produces a coverage report (requires `@vitest/coverage-v8` installed — run `pnpm add -D @vitest/coverage-v8` if missing)
 - [ ] Line coverage ≥ 80 % across `src/`
 - [ ] All tests pass in CI (`node >= 18`, same environment as `pnpm build`)
 - [ ] No test uses real network I/O or touches the real filesystem outside of `tmp`/`os.tmpdir()`
@@ -274,9 +400,11 @@ tests/integration/tui/agentRunner.test.tsx
   "test:watch":    "vitest",
   "test:coverage": "vitest run --coverage"
   ```
-- Add `vitest.config.ts` at project root pointing `include` at `tests/**/*.test.{ts,tsx}`
+- Add `vitest.config.ts` at project root pointing `include` at `tests/**/*.test.{ts,tsx}`; set `coverage.thresholds.lines: 80`
 - Use `import { tmpdir } from 'node:os'` + `mkdtemp` for filesystem tests — never write into the repo itself
 - Mock `openai` module with `vi.mock` for agent integration tests
+- For `sessions.test.ts`: use `vi.hoisted` + `vi.mock('../src/config.js', ...)` to redirect all path constants to a temp directory — this avoids mutating the real `~/.agentic/` directory during tests
+- Add `coverage/` to `.gitignore` — Vitest writes the coverage report there and it must not be committed
 
 ---
 
@@ -287,3 +415,21 @@ tests/integration/tui/agentRunner.test.tsx
 ## Milestone
 
 `v5.0.0`
+
+---
+
+## Resolution
+
+Implemented in commits on branch `feature/test-coverage`. Final state:
+
+| Metric | Result |
+|--------|--------|
+| Test files | 27 |
+| Total tests | 258 |
+| Pass rate | 100 % |
+| Statement coverage | 99.7 % |
+| Branch coverage | 98.48 % |
+| Function coverage | 97.95 % |
+| Line coverage | 100 % |
+
+All acceptance criteria met. `@vitest/coverage-v8` added to `devDependencies` and `coverage/` added to `.gitignore`.

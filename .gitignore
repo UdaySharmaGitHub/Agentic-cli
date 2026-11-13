@@ -19,6 +19,9 @@ chat_history.json
 # ever run with HOME pointed at the repo.
 .agentic/
 
+# Test coverage output
+coverage/
+
 # IDE / OS metadata
 .vscode/
 .idea/
