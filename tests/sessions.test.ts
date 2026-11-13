@@ -34,6 +34,8 @@ import {
   initSessions,
   getHistoryPath,
   getSessionDir,
+  updateLastActive,
+  incrementTurns,
   type SessionsIndex,
 } from '../src/sessions.js';
 
@@ -134,7 +136,39 @@ describe('sessions', () => {
     );
   });
 
-  // ── renameSession ─────────────────────────────────────────────────────────────
+  it('deleteSession removes a non-active session from index and disk', async () => {
+    await initSessions();
+    await createSession('bar');
+    await deleteSession('bar', 'default');
+    const index = await loadIndex();
+    expect(index.sessions.find(s => s.name === 'bar')).toBeUndefined();
+    await expect(fs.stat(getSessionDir('bar'))).rejects.toThrow();
+  });
+
+  it('deleteSession throws when session does not exist', async () => {
+    await initSessions();
+    await expect(deleteSession('ghost', 'default')).rejects.toThrow('Session "ghost" not found');
+  });
+
+  it('initSessions re-run with same name does not duplicate the session entry', async () => {
+    await initSessions('bar');
+    await initSessions('bar'); // session already exists — branch where find() returns truthy
+    const index = await loadIndex();
+    const barEntries = index.sessions.filter(s => s.name === 'bar');
+    expect(barEntries).toHaveLength(1);
+  });
+
+  it('renameSession throws when oldName does not exist', async () => {
+    await initSessions();
+    await expect(renameSession('ghost', 'new-name')).rejects.toThrow('Session "ghost" not found');
+  });
+
+  it('renameSession throws when newName already exists', async () => {
+    await initSessions();
+    await createSession('bar');
+    await createSession('baz');
+    await expect(renameSession('bar', 'baz')).rejects.toThrow('Session "baz" already exists');
+  });
 
   it('renameSession renames dir and updates index entry', async () => {
     await initSessions();
@@ -166,5 +200,35 @@ describe('sessions', () => {
     const reloaded = await loadIndex();
     expect(reloaded.active).toBe('work');
     expect(reloaded.sessions).toHaveLength(2);
+  });
+
+  // ── updateLastActive ──────────────────────────────────────────────────────────
+
+  it('updateLastActive updates lastActiveAt for an existing session', async () => {
+    await initSessions();
+    const before = (await loadIndex()).sessions.find(s => s.name === 'default')!.lastActiveAt;
+    await new Promise(r => setTimeout(r, 10));
+    await updateLastActive('default');
+    const after = (await loadIndex()).sessions.find(s => s.name === 'default')!.lastActiveAt;
+    expect(after >= before).toBe(true);
+  });
+
+  it('updateLastActive is a no-op for an unknown session name', async () => {
+    await initSessions();
+    await expect(updateLastActive('ghost')).resolves.toBeUndefined();
+  });
+
+  // ── incrementTurns ───────────────────────────────────────────────────────────
+
+  it('incrementTurns increases turns by 1', async () => {
+    await initSessions();
+    await incrementTurns('default');
+    const index = await loadIndex();
+    expect(index.sessions.find(s => s.name === 'default')!.turns).toBe(1);
+  });
+
+  it('incrementTurns is a no-op for an unknown session name', async () => {
+    await initSessions();
+    await expect(incrementTurns('ghost')).resolves.toBeUndefined();
   });
 });
