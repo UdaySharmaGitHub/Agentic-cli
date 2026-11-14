@@ -1,0 +1,48 @@
+name: Dependabot Auto-merge
+
+on: pull_request
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - name: Fetch Dependabot metadata
+        uses: dependabot/fetch-metadata@v2
+        id: metadata
+
+      # Patch bumps — auto-merge after CI passes, delete branch
+      - name: Auto-merge patch bump
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        run: gh pr merge --auto --squash --delete-branch "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Minor bumps — auto-merge after CI passes, delete branch
+      - name: Auto-merge minor bump
+        if: steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash --delete-branch "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Major bumps — label, request review, leave for manual approval; branch deleted after manual merge
+      - name: Flag major bump for manual review
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr edit "$PR_URL" --add-label "major-bump"
+          gh pr edit "$PR_URL" --add-reviewer "UdaySharmaGitHub"
+          gh pr comment "$PR_URL" --body "$(cat <<'EOF'
+          ⚠️ **Major version bump** — this update may contain breaking changes and requires manual review.
+
+          **To merge:** review the changelog, approve this PR, then merge manually.
+          The branch will be deleted automatically after merge.
+          EOF
+          )"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,26 @@
+name: Welcome
+
+on:
+  pull_request_target:
+    types: [opened]
+  issues:
+    types: [opened]
+
+jobs:
+  welcome:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/first-interaction@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          issue-message: |
+            👋 Thanks for opening your first issue on Agentic CLI!
+            Please make sure you've read [CONTRIBUTING.md](./CONTRIBUTING.md) and filled out all relevant sections.
+            We'll get back to you as soon as possible.
+          pr-message: |
+            👋 Thanks for your first contribution to Agentic CLI!
+            Your PR will be reviewed shortly. Make sure all CI checks pass before requesting a review.
+            See [CONTRIBUTING.md](./CONTRIBUTING.md) for our contribution guidelines.

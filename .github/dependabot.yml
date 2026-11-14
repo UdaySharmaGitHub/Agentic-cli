@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    # Minor/patch → grouped PR, auto-merged after CI by dependabot-auto-merge.yml
+    # Major       → separate PR per package, requires manual approval (handled in dependabot-auto-merge.yml)
+    groups:
+      minor-version-updates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

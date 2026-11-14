@@ -1,0 +1,14 @@
+# Global owner — reviews all PRs by default
+* @UdaySharmaGitHub
+
+# Core agent and model integration
+src/agent.ts @UdaySharmaGitHub
+src/openai.ts @UdaySharmaGitHub
+src/prompts.ts @UdaySharmaGitHub
+
+# Safety-critical paths
+src/safety.ts @UdaySharmaGitHub
+src/tools/runCommand.ts @UdaySharmaGitHub
+
+# CI and infrastructure
+.github/ @UdaySharmaGitHub
