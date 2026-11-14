@@ -47,9 +47,9 @@ infrastructure:
 
 migration:
   - head-branch:
-    - 'migration/**'
-    - 'migrate/**'
-    - 'refactor/migration*'
+    - '^migration/'
+    - '^migrate/'
+    - '^refactor/migration'
 
 runbook:
   - changed-files:

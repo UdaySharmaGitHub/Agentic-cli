@@ -23,8 +23,9 @@ const approve = async () => true;
 
 // Real fast-glob for most tests
 async function realFg(pattern: string, opts: { cwd: string; dot: boolean; onlyFiles: boolean; ignore: string[] }) {
-  const { default: fg } = await vi.importActual<typeof import('fast-glob')>('fast-glob');
-  return fg(pattern, opts);
+  // vi.importActual wraps CJS modules with a .default at runtime; tsc doesn't know this
+  const mod = await vi.importActual('fast-glob') as { default: typeof import('fast-glob') };
+  return mod.default(pattern, opts);
 }
 
 describe('searchFiles tool', () => {
