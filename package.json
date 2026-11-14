@@ -20,7 +20,7 @@
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "dotenv": "^16.4.5",
-    "execa": "^9.5.2",
+    "execa": "^10.2.1",
     "fast-glob": "^3.3.3",
     "ink": "^5.2.1",
     "ink-spinner": "^5.0.0",
