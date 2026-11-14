@@ -37,7 +37,7 @@
     "@types/react": "^18.3.31",
     "@vitest/coverage-v8": "^5.1.0",
     "happy-dom": "^21.0.4",
-    "ink-testing-library": "^3.0.0",
+    "ink-testing-library": "^4.0.0",
     "tsup": "^8.1.0",
     "tsx": "^4.15.7",
     "typescript": "^5.4.5",
