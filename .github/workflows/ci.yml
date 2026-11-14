@@ -14,8 +14,10 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [18, 20, 22]
+        # Node 18 is EOL (Apr 2025) and vitest 5.x requires node:util styleText (Node ≥ 20.12)
+        node-version: [20, 22]
 
     steps:
       - uses: actions/checkout@v4
